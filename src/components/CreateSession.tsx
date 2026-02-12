@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Copy, CheckCheck, QrCode, Loader2, UserCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ArrowLeft, CheckCheck, Copy, Loader2, QrCode, UserCheck } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
 import ActiveSession from './ActiveSession';
+
+const SOCKET_URL = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:3001';
 
 interface CreateSessionProps {
   onBack: () => void;
@@ -16,21 +19,29 @@ function CreateSession({ onBack }: CreateSessionProps) {
     requesterId: string;
     requesterName: string;
   } | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
-    // Generate a random session ID
+    const newSocket = io(SOCKET_URL);
+    setSocket(newSocket);
+
+    // Generate session ID
     const id = Math.random().toString(36).substring(2, 10).toUpperCase();
     setSessionId(id);
 
-    // Simulate waiting for connection
-    const timer = setTimeout(() => {
-      setConnectionRequest({
-        requesterId: 'user_' + Math.random().toString(36).substring(2, 6),
-        requesterName: 'Remote User'
-      });
-    }, 5000);
+    newSocket.emit('create-session', id);
 
-    return () => clearTimeout(timer);
+    newSocket.on('connection-request', ({ viewerId }) => {
+      setConnectionRequest({
+        requesterId: viewerId,
+        requesterName: 'Remote Developer'
+      });
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
   }, []);
 
   const copyToClipboard = async () => {
@@ -39,10 +50,39 @@ function CreateSession({ onBack }: CreateSessionProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleAcceptConnection = () => {
-    setConnectionRequest(null);
-    setWaiting(false);
-    setSessionActive(true);
+  const handleAcceptConnection = async () => {
+    if (!socket || !connectionRequest) return;
+
+    try {
+      // Get screen capture source from Electron
+      // @ts-ignore
+      const sources = await window.electron.getSources();
+      const source = sources[0]; // Just take the first one (screen) for now
+
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          //@ts-ignore
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: source.id,
+          }
+        }
+      } as any);
+
+      setStream(mediaStream);
+      socket.emit('approve-request', { 
+        sessionId, 
+        viewerId: connectionRequest.requesterId, 
+        approved: true 
+      });
+      
+      setConnectionRequest(null);
+      setWaiting(false);
+      setSessionActive(true);
+    } catch (err) {
+      console.error('Error capturing screen:', err);
+    }
   };
 
   const handleDenyConnection = () => {
@@ -51,7 +91,15 @@ function CreateSession({ onBack }: CreateSessionProps) {
   };
 
   if (sessionActive) {
-    return <ActiveSession onEnd={onBack} isHost={true} />;
+    return (
+      <ActiveSession 
+        onEnd={onBack} 
+        isHost={true} 
+        sessionId={sessionId} 
+        socket={socket} 
+        stream={stream} 
+      />
+    );
   }
 
   return (

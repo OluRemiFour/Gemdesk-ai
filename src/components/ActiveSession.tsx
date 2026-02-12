@@ -1,15 +1,20 @@
-import { useState, useEffect } from 'react';
-import { X, Maximize2, Minimize2, Settings, Activity, MonitorOff, MousePointer, Keyboard, Eye } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { X, Maximize2, Minimize2, Settings, Activity, MonitorOff, MousePointer, Keyboard, Eye, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+import { Socket } from 'socket.io-client';
+import SimplePeer from 'simple-peer';
 
 interface ActiveSessionProps {
   onEnd: () => void;
   isHost: boolean;
+  sessionId: string;
+  socket: Socket | null;
+  stream?: MediaStream | null;
 }
 
-function ActiveSession({ onEnd, isHost }: ActiveSessionProps) {
+function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessionProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [quality, setQuality] = useState([75]);
@@ -17,8 +22,56 @@ function ActiveSession({ onEnd, isHost }: ActiveSessionProps) {
   const [fps, setFps] = useState(30);
   const [latency, setLatency] = useState(45);
   const [bandwidth, setBandwidth] = useState(2.4);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const peerRef = useRef<SimplePeer.Instance | null>(null);
 
   useEffect(() => {
+    if (!socket) return;
+
+    // WebRTC Peer setup
+    const peer = new SimplePeer({
+      initiator: !isHost, // Viewer initiates
+      trickle: false,
+      stream: isHost ? (stream || undefined) : undefined,
+    });
+
+    peerRef.current = peer;
+
+    peer.on('signal', (data) => {
+      socket.emit('signal', {
+        to: isHost ? undefined : undefined, // This needs to be handled by the server relaying to the other party
+        // Actually the server handles 'signal' event by ID, but we need to know the 'to' ID.
+        // I'll simplify the signal relaying logic in the server or components.
+        // Let's assume the server knows who the other party is based on the sessionId.
+        // I'll adjust the signal event to include sessionId.
+        sessionId,
+        signal: data
+      });
+    });
+
+    socket.on('signal', ({ signal }) => {
+      peer.signal(signal);
+    });
+
+    peer.on('stream', (st) => {
+      setRemoteStream(st);
+      if (videoRef.current) {
+        videoRef.current.srcObject = st;
+      }
+    });
+
+    // Remote Control Handling
+    if (isHost) {
+      socket.on('control-command', ({ command }) => {
+        if (controlEnabled) {
+          // @ts-ignore
+          window.electron.sendInput(command.type, command.data);
+        }
+      });
+    }
+
     // Simulate changing stats
     const interval = setInterval(() => {
       setFps(Math.floor(28 + Math.random() * 4));
@@ -26,8 +79,46 @@ function ActiveSession({ onEnd, isHost }: ActiveSessionProps) {
       setBandwidth(2.0 + Math.random() * 1.0);
     }, 1000);
 
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      clearInterval(interval);
+      peer.destroy();
+    };
+  }, [isHost, socket, stream, controlEnabled]);
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isHost || !controlEnabled || !socket) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    socket.emit('control-command', {
+      sessionId,
+      command: { type: 'mouse-move', data: { x, y } }
+    });
+  };
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isHost || !controlEnabled || !socket) return;
+    socket.emit('control-command', {
+      sessionId,
+      command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right' } }
+    });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isHost || !controlEnabled || !socket) return;
+    socket.emit('control-command', {
+      sessionId,
+      command: { type: 'keydown', data: { key: e.key, code: e.code } }
+    });
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent) => {
+    if (isHost || !controlEnabled || !socket) return;
+    socket.emit('control-command', {
+      sessionId,
+      command: { type: 'keyup', data: { key: e.key, code: e.code } }
+    });
+  };
 
   const handleEndSession = () => {
     if (confirm('Are you sure you want to end this session?')) {
@@ -45,9 +136,14 @@ function ActiveSession({ onEnd, isHost }: ActiveSessionProps) {
             <span className="text-sm font-medium">
               {isHost ? 'Sharing Your Desktop' : 'Connected to Remote Desktop'}
             </span>
+            {!isHost && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${controlEnabled ? 'bg-primary/20 text-primary border border-primary/30' : 'bg-muted text-muted-foreground'}`}>
+                {controlEnabled ? 'Write (Control)' : 'Read (View-Only)'}
+              </span>
+            )}
           </div>
           <div className="text-xs text-muted-foreground border-l border-border pl-4">
-            Session ID: <span className="font-mono">ABC12345</span>
+            Session ID: <span className="font-mono">{sessionId}</span>
           </div>
         </div>
 
@@ -99,12 +195,37 @@ function ActiveSession({ onEnd, isHost }: ActiveSessionProps) {
       <div className="flex-1 flex relative">
         {/* Remote Desktop View */}
         <div className="flex-1 flex items-center justify-center bg-black">
-          <div className="w-full h-full bg-gradient-to-br from-muted/10 to-background/20 flex items-center justify-center border border-border/20">
-            <div className="text-center">
-              <MonitorOff className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-              <p className="text-sm text-muted-foreground">Remote desktop stream would appear here</p>
-              <p className="text-xs text-muted-foreground/60 mt-2">Resolution: 1920x1080 • 16:9</p>
-            </div>
+          <div 
+            className="w-full h-full bg-black flex items-center justify-center relative overflow-hidden outline-none"
+            onMouseMove={handleMouseMove}
+            onClick={handleClick}
+            onKeyDown={handleKeyDown}
+            onKeyUp={handleKeyUp}
+            tabIndex={0}
+          >
+            {isHost ? (
+              <div className="text-center">
+                <div className="w-16 h-16 bg-primary/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-primary/30">
+                  <MonitorOff className="w-8 h-8 text-primary" />
+                </div>
+                <p className="text-sm text-foreground/80">Streaming in progress...</p>
+                <p className="text-xs text-muted-foreground mt-1">Your desktop is being shared</p>
+              </div>
+            ) : (
+              remoteStream ? (
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="text-center">
+                  <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+                  <p className="text-sm text-muted-foreground">Initializing stream...</p>
+                </div>
+              )
+            )}
           </div>
         </div>
 

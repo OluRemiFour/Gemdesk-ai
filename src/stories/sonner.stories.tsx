@@ -90,7 +90,7 @@ export const WithAction = {
   args: {},
 };
 
-export const Promise = {
+export const WithPromise = {
   render: () => (
     <div>
       <Toaster />

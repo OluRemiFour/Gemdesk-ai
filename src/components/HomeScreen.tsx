@@ -1,15 +1,34 @@
-import { useState } from 'react';
-import { Monitor, UserPlus, Settings, Clock, Info } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Monitor, UserPlus, Settings, Clock, Info, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import CreateSession from './CreateSession';
 import JoinSession from './JoinSession';
 import SessionHistory from './SessionHistory';
 import SettingsPanel from './SettingsPanel';
+import AIWorkspace from '@/components/AIWorkspace';
 
-type View = 'home' | 'create' | 'join' | 'history' | 'settings';
+type View = 'home' | 'create' | 'join' | 'history' | 'settings' | 'ai';
 
 function HomeScreen() {
   const [currentView, setCurrentView] = useState<View>('home');
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        e.preventDefault();
+        setCurrentView('create');
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
+        e.preventDefault();
+        setCurrentView('join');
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault();
+        setCurrentView('ai');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   if (currentView === 'create') {
     return <CreateSession onBack={() => setCurrentView('home')} />;
@@ -27,6 +46,10 @@ function HomeScreen() {
     return <SettingsPanel onBack={() => setCurrentView('home')} />;
   }
 
+  if (currentView === 'ai') {
+    return <AIWorkspace onBack={() => setCurrentView('home')} />;
+  }
+
   return (
     <div className="w-screen h-screen bg-background flex flex-col">
       {/* Header */}
@@ -38,10 +61,19 @@ function HomeScreen() {
             </div>
             <div>
               <h1 className="text-lg font-semibold tracking-tight">GemDesk</h1>
-              <p className="text-xs text-muted-foreground">Remote Desktop Control</p>
+              <p className="text-xs text-muted-foreground">Professional Remote Tool</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCurrentView('ai')}
+              className="gap-2 text-primary hover:text-primary hover:bg-primary/10"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span className="text-sm font-medium">AI Analysis</span>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -66,9 +98,9 @@ function HomeScreen() {
 
       {/* Main Content */}
       <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-2xl">
+        <div className="w-full max-w-4xl">
           {/* Primary Actions */}
-          <div className="grid grid-cols-2 gap-4 mb-8">
+          <div className="grid grid-cols-3 gap-4 mb-8">
             <button
               onClick={() => setCurrentView('create')}
               className="group relative bg-card border border-border hover:border-foreground/20 p-8 text-left transition-all duration-200 hover:bg-accent"
@@ -104,6 +136,25 @@ function HomeScreen() {
               <div className="mt-6 flex items-center gap-2 text-xs text-muted-foreground">
                 <kbd className="px-2 py-1 bg-muted border border-border rounded text-xs font-mono">⌘</kbd>
                 <kbd className="px-2 py-1 bg-muted border border-border rounded text-xs font-mono">J</kbd>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setCurrentView('ai')}
+              className="group relative bg-[#121212] border border-primary/20 hover:border-primary/40 p-8 text-left transition-all duration-200 hover:bg-primary/5"
+            >
+              <div className="absolute top-4 right-4 w-10 h-10 bg-primary/10 border border-primary/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                <Sparkles className="w-5 h-5 text-primary" />
+              </div>
+              <div className="pr-14">
+                <h2 className="text-xl font-semibold mb-2 text-primary">Analyze Screen</h2>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Let Gemini AI understand your screen and help you solve complex problems
+                </p>
+              </div>
+              <div className="mt-6 flex items-center gap-2 text-xs text-primary/60">
+                <kbd className="px-2 py-1 bg-primary/10 border border-primary/20 rounded text-xs font-mono">⌘</kbd>
+                <kbd className="px-2 py-1 bg-primary/10 border border-primary/20 rounded text-xs font-mono">A</kbd>
               </div>
             </button>
           </div>

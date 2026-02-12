@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import ActiveSession from './ActiveSession';
+import { io, Socket } from 'socket.io-client';
+
+const SOCKET_URL = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:3001';
 
 interface JoinSessionProps {
   onBack: () => void;
@@ -14,27 +17,42 @@ function JoinSession({ onBack }: JoinSessionProps) {
   const [error, setError] = useState<string | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
   const [waitingApproval, setWaitingApproval] = useState(false);
+  const [socket, setSocket] = useState<Socket | null>(null);
+
+  useEffect(() => {
+    const newSocket = io(SOCKET_URL);
+    setSocket(newSocket);
+
+    newSocket.on('request-approved', ({ hostId }) => {
+      setWaitingApproval(false);
+      setSessionActive(true);
+    });
+
+    newSocket.on('request-denied', () => {
+      setWaitingApproval(false);
+      setError('Connection was denied by the host');
+      setIsConnecting(false);
+    });
+
+    newSocket.on('error', (msg) => {
+      setError(msg);
+      setIsConnecting(false);
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
+  }, []);
 
   const handleConnect = async () => {
-    if (sessionId.trim().length < 6) {
+    if (sessionId.trim().length < 6 || !socket) {
       setError('Please enter a valid session ID');
       return;
     }
 
     setError(null);
     setIsConnecting(true);
-
-    // Simulate connection attempt
-    setTimeout(() => {
-      setIsConnecting(false);
-      setWaitingApproval(true);
-
-      // Simulate approval
-      setTimeout(() => {
-        setWaitingApproval(false);
-        setSessionActive(true);
-      }, 3000);
-    }, 2000);
+    socket.emit('join-session', sessionId);
   };
 
   const handleCancel = () => {
@@ -44,7 +62,14 @@ function JoinSession({ onBack }: JoinSessionProps) {
   };
 
   if (sessionActive) {
-    return <ActiveSession onEnd={onBack} isHost={false} />;
+    return (
+      <ActiveSession 
+        onEnd={onBack} 
+        isHost={false} 
+        sessionId={sessionId} 
+        socket={socket} 
+      />
+    );
   }
 
   return (

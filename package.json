@@ -1,18 +1,48 @@
 {
-  "name": "starter",
+  "name": "gemdesk",
   "private": true,
   "version": "0.0.0",
+  "description": "A lightweight, developer-first remote desktop tool with AI capabilities",
+  "author": {
+    "name": "GemDesk Team",
+    "email": "support@gemdesk.app"
+  },
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc ; vite build",
-    "build-no-errors": "tsc ; vite build",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build-no-errors": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "types:supabase": "npx supabase gen types typescript --project-id $SUPABASE_PROJECT_ID > src/types/supabase.ts"
+    "start": "electron .",
+    "clean": "node scripts/clean.js",
+    "build:frontend": "tsc && vite build",
+    "build:electron": "npm run clean && cross-env CSC_SKIP=true electron-builder --win",
+    "build": "npm run build:frontend && npm run build:electron"
+  },
+  "build": {
+    "appId": "com.gemdesk.app",
+    "productName": "GemDesk",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "dir"
+    }
   },
   "dependencies": {
+    "@capacitor/android": "^8.0.2",
+    "@capacitor/cli": "^8.0.2",
+    "@capacitor/core": "^8.0.2",
+    "@google/genai": "^1.39.0",
     "@hookform/resolvers": "^3.10.0",
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.8",
@@ -46,22 +76,31 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "dotenv": "^16.4.5",
+    "electron-updater": "^6.7.3",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^11.18.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.394.0",
+    "mongodb": "^7.1.0",
     "next-themes": "^0.4.6",
     "react": "^18.2.0",
     "react-day-picker": "^9.12.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.68.0",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^2.1.9",
     "react-router": "^6.23.1",
     "react-router-dom": "^6.23.1",
     "recharts": "^2.15.4",
+    "remark-gfm": "^4.0.1",
+    "sharp": "^0.34.5",
+    "simple-peer": "^9.11.1",
+    "socket.io-client": "^4.7.5",
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
+    "tesseract.js": "^7.0.0",
     "vaul": "^0.9.9",
     "zod": "^3.25.76"
   },
@@ -69,11 +108,22 @@
     "@types/node": "^20.14.2",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
     "@vitejs/plugin-react-swc": "^4.1.0",
     "autoprefixer": "^10.4.19",
+    "buffer": "^6.0.3",
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "electron": "^30.0.1",
+    "electron-builder": "^24.13.3",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.0",
     "postcss": "^8.4.38",
     "tailwindcss": "3.4.1",
     "typescript": "^5.8.2",
-    "vite": "^7.1.12"
+    "vite": "^7.1.12",
+    "wait-on": "^7.2.0"
   }
 }
