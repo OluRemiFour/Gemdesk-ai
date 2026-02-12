@@ -13,10 +13,10 @@ dist-ssr
 dist-electron
 *.local
 
-/node_modules
-/dist
-/dist-ssr
-/dist-electron
+node_modules/
+dist/
+dist-ssr/
+dist-electron/
 *.local
 
 
