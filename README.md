@@ -25,7 +25,7 @@ GemDesk is an AI-powered desktop assistant built with Electron, React, and Vite.
     Create a `.env` file based on the environment:
     ```env
     VITE_GEMINI_API_KEY=your_gemini_api_key
-    VITE_BACKEND_URL=http://localhost:3001
+    VITE_BACKEND_URL=https://gemdesk-backend.onrender.com
     ```
 
 ## Running the App
