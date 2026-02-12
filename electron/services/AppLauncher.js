@@ -83,24 +83,41 @@ export class AppLauncher {
         return Object.keys(this.commonApps).concat(Array.from(this.customApps.keys()));
     }
 
-    async launchApp(appName) {
+    async launchApp(appName, args = []) {
         if (!appName) return { success: false, error: 'App name is required' };
         
-        const name = appName.toLowerCase().trim();
+        const name = appName.trim();
+        
+        // 0. Check if it's an absolute path to a file or folder
+        if (path.isAbsolute(name) && fs.existsSync(name)) {
+            try {
+                if (os.platform() === 'win32') {
+                    // Use start command for folders and files
+                    await execPromise(`start "" "${name}"`);
+                } else {
+                    return this.execute(name, args);
+                }
+                return { success: true, message: `Opened path: ${name}` };
+            } catch (e) {
+                console.error(`Failed to open path ${name}:`, e);
+            }
+        }
+
+        const nameLower = name.toLowerCase();
         
         // 1. Check custom apps
-        if (this.customApps.has(name)) {
-            return this.execute(this.customApps.get(name));
+        if (this.customApps.has(nameLower)) {
+            return this.execute(this.customApps.get(nameLower), args);
         }
 
         // 2. Check common apps map
-        const candidates = this.commonApps[name];
+        const candidates = this.commonApps[nameLower];
         if (candidates) {
             for (const candidate of candidates) {
                 // Handle special commands or shell: paths
                 if (candidate.startsWith('start ') || candidate.startsWith('shell:')) {
                      try {
-                        await this.execute(candidate);
+                        await this.execute(candidate, args);
                         return { success: true, message: `Launched ${name}` };
                      } catch (e) {
                          console.log(`Failed to launch ${candidate}:`, e.message);
@@ -110,11 +127,11 @@ export class AppLauncher {
                 
                 // Handle file paths
                 if (path.isAbsolute(candidate) && fs.existsSync(candidate)) {
-                    return this.execute(candidate);
+                    return this.execute(candidate, args);
                 } else if (!path.isAbsolute(candidate)) {
                     // Start relative/system commands
                      try {
-                        await this.execute(candidate);
+                        await this.execute(candidate, args);
                         return { success: true, message: `Launched ${name}` };
                      } catch (e) {
                          continue;
@@ -125,7 +142,7 @@ export class AppLauncher {
 
         // 3. Try to execute directly (if it's in PATH)
         try {
-            await this.execute(name);
+            await this.execute(name, args);
             return { success: true, message: `Launched ${name} from system PATH` };
         } catch (e) {
             // ignore
@@ -135,7 +152,8 @@ export class AppLauncher {
         if (os.platform() === 'win32') {
              try {
                 // use start command to let windows handle it
-                await execPromise(`start "" "${name}"`);
+                const argsStr = args.length > 0 ? ` ${args.map(a => `"${a}"`).join(' ')}` : '';
+                await execPromise(`start "" "${name}"${argsStr}`);
                 return { success: true, message: `Launched ${name} via 'start' command` };
             } catch (e) {
                 return { success: false, error: `Could not launch '${name}'. App not found.` };
@@ -145,17 +163,18 @@ export class AppLauncher {
         return { success: false, error: `App '${name}' not found.` };
     }
 
-    async execute(commandPath) {
+    async execute(commandPath, args = []) {
         // Handle shell:AppsFolder or start commands
         if (commandPath.startsWith('shell:') || commandPath.startsWith('start ')) {
-             const cmd = commandPath.startsWith('start ') ? commandPath : `start ${commandPath}`;
+             const argsStr = args.length > 0 ? ` ${args.map(a => `"${a}"`).join(' ')}` : '';
+             const cmd = (commandPath.startsWith('start ') ? commandPath : `start ${commandPath}`) + argsStr;
              await execPromise(cmd);
              return { success: true, message: `Executed ${commandPath}` };
         }
         
         // Handle executables
         return new Promise((resolve, reject) => {
-             const subprocess = spawn(commandPath, [], {
+             const subprocess = spawn(commandPath, args, {
                  detached: true,
                  stdio: 'ignore'
              });

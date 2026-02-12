@@ -167,16 +167,35 @@ export class ComputerControl {
     }
     
     // Check if it's a URL first
-    if (appName.startsWith('http://') || appName.startsWith('https://') || appName.includes('.com') || appName.includes('.org')) {
+    if (appName.startsWith('http://') || appName.startsWith('https://')) {
         return await this.openUrl(appName);
     }
 
-    // Special handling for WhatsApp which might be a protocol
-    if (appName.toLowerCase() === 'whatsapp' && url) {
-        return await this.openUrl(`whatsapp://send?phone=${url}`);
+    // If appName contains a space and the second part looks like a URL, split it
+    let finalApp = appName;
+    let finalArgs = [];
+    const parts = appName.split(/\s+/);
+    if (parts.length > 1) {
+        const lastPart = parts[parts.length - 1];
+        if (lastPart.includes('.') && (lastPart.startsWith('http') || !lastPart.includes(':'))) {
+            finalApp = parts.slice(0, -1).join(' ');
+            finalArgs = [lastPart];
+        }
     }
 
-    return this.launcher.launchApp(appName);
+    if (url) {
+        finalArgs.push(url);
+    }
+
+    // Special handling for WhatsApp which might be a protocol
+    if (finalApp.toLowerCase() === 'whatsapp' && finalArgs.length > 0) {
+        const target = finalArgs[0];
+        if (/^\+?[0-9\s\-]+$/.test(target)) {
+            return await this.openUrl(`whatsapp://send?phone=${target.replace(/\s+/g, '')}`);
+        }
+    }
+
+    return this.launcher.launchApp(finalApp, finalArgs);
   }
 
   async openUrl(url) {

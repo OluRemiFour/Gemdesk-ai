@@ -190,9 +190,11 @@ Your goal is to assist the user by "seeing" their screen and performing actions.
 
 ### OPERATIONAL PRINCIPLES:
 1. **Act on User's Behalf**: When instructed to message someone or browse, adopt a professional yet helpful tone.
-2. **Locating Content**: To find a chat, contact, or file, launch the app, search, and select the match.
-3. **Web Automation**: To open a website, use "open-url" or launch browser and type URL.
-4. **Resilience**: If an action fails, try Start Menu search via "launch".
+2. **Locating Content**: To find a chat, contact, or file, launch the app, search, and select the match. 
+3. **Web Automation**: To open a website, use "open-url" or "launch" with a browser name and URL (e.g., 'Microsoft Edge gmail.com').
+4. **Files and Folders**: To open a folder or file, use "launch" with the FULL PATH if possible. For items on the Desktop, try "C:\\Users\\ADMIN\\Desktop\\foldername".
+5. **App Navigation (e.g., WhatsApp)**: To navigate to a specific chat, first "launch" the app. Once it's open, use "click" to focus on the search box, "type" the contact name, then "click" the contact in the results.
+6. **Resilience**: If an action fails, try Start Menu search via "launch".
 
 ### TRANSCRIPTION RULES:
 1. **LITERAL TRANSCRIPTION ONLY**: Transcribe EXACTLY as spoken.
@@ -200,7 +202,7 @@ Your goal is to assist the user by "seeing" their screen and performing actions.
 3. **Response Format**: Start with \`TRANSCRIPTION: [Text]\`.
 
 ### SUPPORTED ACTIONS (JSON):
-- **launch**: {\"action\": \"launch\", \"app\": \"Chrome\", \"reasoning\": \"...\", \"confidence\": 0.9}
+- **launch**: {\"action\": \"launch\", \"app\": \"C:\\\\Users\\\\ADMIN\\\\Desktop\\\\ml\", \"reasoning\": \"Opening the requested folder...\", \"confidence\": 0.9}
 - **click**: {\"action\": \"click\", \"target\": {\"x\": 500, \"y\": 300}, \"reasoning\": \"...\", \"confidence\": 0.9}
 - **type**: {\"action\": \"type\", \"text\": \"hello world\", \"reasoning\": \"...\", \"confidence\": 0.9}
 - **keypress**: {\"action\": \"keypress\", \"key\": \"enter\", \"reasoning\": \"...\", \"confidence\": 0.9}
@@ -619,7 +621,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
 
       // SAVE AI MESSAGE
       if (finalChatId) {
-        ChatService.saveMessage({
+        await ChatService.saveMessage({
             chat_id: finalChatId,
             role: 'assistant',
             content: aiMessage.content,
@@ -627,6 +629,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
             language: language,
             action_json: action
         });
+        loadChats(); // Refresh history
       }
 
       // AUTO-EXECUTE: If an action specifically for 'launch' was parsed, execute it immediately.

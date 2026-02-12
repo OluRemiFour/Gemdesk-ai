@@ -96,11 +96,13 @@ export const ChatService = {
   // Update chat title (e.g., after first message)
   async updateChatTitle(chatId: string, title: string) {
     try {
-      if (!window.electron?.updateChatTitle) {
-        console.error('Electron updateChatTitle not available');
-        return;
-      }
-      await window.electron.updateChatTitle(chatId, title);
+      const response = await fetch(`${BACKEND_URL}/api/chats/${chatId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title })
+      });
+      if (!response.ok) throw new Error('Failed to update chat title');
+      return await response.json();
     } catch (error) {
       console.error('Error updating chat title:', error);
     }
@@ -109,11 +111,11 @@ export const ChatService = {
   // Delete a chat
   async deleteChat(chatId: string) {
     try {
-      if (!window.electron?.deleteChat) {
-        console.error('Electron deleteChat not available');
-        return;
-      }
-      await window.electron.deleteChat(chatId);
+      const response = await fetch(`${BACKEND_URL}/api/chats/${chatId}`, {
+        method: 'DELETE'
+      });
+      if (!response.ok) throw new Error('Failed to delete chat');
+      return await response.json();
     } catch (error) {
       console.error('Error deleting chat:', error);
     }
