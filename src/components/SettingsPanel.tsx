@@ -272,15 +272,15 @@ function SettingsPanel({ onBack }: SettingsPanelProps) {
                 <div className="flex-1">
                   <h2 className="font-semibold mb-1">GemDesk</h2>
                   <p className="text-sm text-muted-foreground mb-3">
-                    Version 1.0.0 • Build 2024.1
+                    Version 1.0.0 • Build 2026.1
                   </p>
                   <p className="text-xs text-muted-foreground leading-relaxed">
                     A lightweight, developer-first remote desktop tool built for speed, security, and clarity.
                   </p>
                   <div className="flex gap-3 mt-4">
-                    <Button variant="outline" size="sm">Documentation</Button>
-                    <Button variant="outline" size="sm">GitHub</Button>
-                    <Button variant="outline" size="sm">Report Issue</Button>
+                    <Button variant="outline" size="sm" onClick={() => window.open('http://localhost:3000/#documentation', '_blank')}>Documentation</Button>
+                    <Button variant="outline" size="sm" onClick={() => window.open('#', '_blank')}>GitHub</Button>
+                    <Button variant="outline" size="sm" onClick={() => window.open('http://localhost:3000/#report-issue', '_blank')}>Report Issue</Button>
                   </div>
                 </div>
               </div>

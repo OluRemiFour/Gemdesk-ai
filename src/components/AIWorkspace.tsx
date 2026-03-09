@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ChatService, Chat } from '@/services/ChatService';
+import SkillLibrary from './SkillLibrary';
 import { 
   ArrowLeft, 
   Send, 
@@ -23,198 +24,117 @@ import {
   Globe,
   Volume2,
   VolumeX,
-  Menu
+  Menu,
+  Zap,
+  FolderPlus,
+  Settings
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import VoiceVisualizer from './VoiceVisualizer';
+import { getGeminiApiKeys } from '@/lib/config';
+import { GeminiService } from '@/services/GeminiService';
 
-// Import Google GenAI
-import { GoogleGenAI } from "@google/genai";
+interface AIWorkspaceProps {
+  onBack: () => void;
+  autoStartRecording?: boolean;
+}
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  screenshot?: string;
   attachment?: string;
-  audioUrl?: string; // New field for replay
-  transcription?: string; // Transcription from AI
-  language?: string; // Language for TTS
+  audioUrl?: string;
+  transcription?: string;
+  language?: string;
 }
 
 interface Action {
-  type: 'click' | 'doubleclick' | 'rightclick' | 'type' | 'keypress' | 'launch' | 'open-url';
-  target?: { x: number; y: number } | string;
+  type: string;
+  target?: string;
   text?: string;
   key?: string;
   app?: string;
   url?: string;
+  content?: string;
+  filename?: string;
+  path?: string;
+  oldPath?: string;
+  newPath?: string;
+  days?: number;
+  contact?: string;
+  message?: string;
+  callType?: 'audio' | 'video';
   reasoning: string;
   confidence: number;
-  originalJson: any;
+  originalJson?: any;
+  background?: boolean;
+  silent?: boolean;
 }
 
-
-interface AIWorkspaceProps {
-  onBack: () => void;
-}
+const GEMINI_API_KEYS = getGeminiApiKeys();
+const geminiService = new GeminiService(GEMINI_API_KEYS);
 
 const VoiceMessagePlayer = ({ audioUrl }: { audioUrl: string }) => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const handleLoadedMetadata = () => {
-      // Chrome has a bug with webm duration being Infinity
-      if (audio.duration === Infinity || isNaN(audio.duration)) {
-        // Trick to force duration calculation: seek to a huge number
-        audio.currentTime = 1e101;
-        
-        const onTimeUpdate = () => {
-           audio.currentTime = 0;
-           audio.removeEventListener('timeupdate', onTimeUpdate);
-        };
-        
-        audio.addEventListener('timeupdate', onTimeUpdate);
-      } else {
-        setDuration(audio.duration);
-      }
-    };
-    
-    // Fallback: update duration during playback if it changes from Infinity
-    const handleDurationChange = () => {
-        if(audio.duration !== Infinity && !isNaN(audio.duration)) {
-            setDuration(audio.duration);
-        }
-    };
-
-    const handleEnded = () => {
-      setIsPlaying(false);
-      setCurrentTime(0);
-    };
-
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('durationchange', handleDurationChange);
-    audio.addEventListener('ended', handleEnded);
-
-    return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('durationchange', handleDurationChange);
-      audio.removeEventListener('ended', handleEnded);
-    };
-  }, []);
-
-  const togglePlay = () => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-      } else {
-        audioRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
-    }
-  };
-
-  const formatTime = (time: number) => {
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    if (audioRef.current) {
-      audioRef.current.currentTime = time;
-      setCurrentTime(time);
-    }
-  };
-
   return (
-    <div className="mt-2 flex items-center gap-3 bg-white/5 p-2 rounded-lg border border-white/10 min-w-[200px]">
-      <audio ref={audioRef} src={audioUrl} />
-      <Button 
-        variant="ghost" 
-        size="sm" 
-        className="h-8 w-8 rounded-full p-0 flex items-center justify-center hover:bg-primary/20 text-primary"
-        onClick={togglePlay}
-      >
-        {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-      </Button>
-      
-      <div className="flex-1 flex flex-col gap-1">
-        <input 
-          type="range"
-          min="0"
-          max={duration || 0}
-          step="0.01"
-          value={currentTime}
-          onChange={handleSliderChange}
-          className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-primary"
-        />
-        <div className="flex justify-between text-[9px] text-muted-foreground font-mono">
-          <span>{formatTime(currentTime)}</span>
-          <span>{formatTime(duration)}</span>
-        </div>
-      </div>
+    <div className="mt-2 p-2 bg-white/5 rounded-lg border border-white/10 flex items-center gap-3">
+      <audio controls src={audioUrl} className="h-8 max-w-[200px]" />
     </div>
   );
 };
 
-// Import GeminiService
-import { GeminiService } from '@/services/GeminiService';
-
-const MESSAGE_ICON_SIZE = 'w-5 h-5';
-// ... (keep unused imports if needed or clean up)
-
-// Get API keys from env, support comma separation
-const GEMINI_API_KEYS = (import.meta.env.VITE_GEMINI_API_KEY || "GEMINI_API_KEY_HERE").split(',').map((k: string) => k.trim());
-const geminiService = new GeminiService(GEMINI_API_KEYS);
-
 const SYSTEM_PROMPT = `
-You are GemDesk AI, a powerful, context-aware computer control agent. 
-Your goal is to assist the user by "seeing" their screen and performing actions.
+You are GemDesk AI, a powerful, context-aware computer control agent running on Windows.
+Your goal is to assist the user by "seeing" their screen and performing actions on their behalf.
 
 ### OPERATIONAL PRINCIPLES:
-1. **Act on User's Behalf**: When instructed to message someone or browse, adopt a professional yet helpful tone.
-2. **Locating Content**: To find a chat, contact, or file, launch the app, search, and select the match. 
-3. **Web Automation**: To open a website, use "open-url" or "launch" with a browser name and URL (e.g., 'Microsoft Edge gmail.com').
-4. **Files and Folders**: To open a folder or file, use "launch" with the FULL PATH if possible. For items on the Desktop, try "C:\\Users\\ADMIN\\Desktop\\foldername".
-5. **App Navigation (e.g., WhatsApp)**: To navigate to a specific chat, first "launch" the app. Once it's open, use "click" to focus on the search box, "type" the contact name, then "click" the contact in the results.
-6. **Resilience**: If an action fails, try Start Menu search via "launch".
+1. **Interactive Feedback**: Use informative status words like "Processing...", "Working on it...", "Checking...", or "Okay". **Avoid using ONLY "Done"** unless the task is completely finished.
+2. **NO NARRATION**: NEVER tell the user "Here is the action I will take" or "I'm going to...". Just execute.
+3. **Execution Only**: Do not explain how you'll execute a task unless it's a security-sensitive operation or requires high-level permission.
+4. **Background Operations**: When opening apps, folders, or URLs, use "background": true unless the user wants to interact immediately.
+5. **Windows Paths**: Always use double-backslashes in JSON (e.g., "C:\\\\Users\\\\ADMIN\\\\Desktop").
+6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
+   NEVER use spaces in action names (e.g. use "open-url" not "open url").
+7. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
+   \`\`\`json
+   { "action": "open-url", "url": "https://google.com", "reasoning": "Opening Google as requested" }
+   \`\`\`
+   NEVER omit commas or colons.
 
-### TRANSCRIPTION RULES:
-1. **LITERAL TRANSCRIPTION ONLY**: Transcribe EXACTLY as spoken.
-2. **Action Generation**: Commands MUST be in a JSON block.
-3. **Response Format**: Start with \`TRANSCRIPTION: [Text]\`.
-
-### SUPPORTED ACTIONS (JSON):
-- **launch**: {\"action\": \"launch\", \"app\": \"C:\\\\Users\\\\ADMIN\\\\Desktop\\\\ml\", \"reasoning\": \"Opening the requested folder...\", \"confidence\": 0.9}
-- **click**: {\"action\": \"click\", \"target\": {\"x\": 500, \"y\": 300}, \"reasoning\": \"...\", \"confidence\": 0.9}
-- **type**: {\"action\": \"type\", \"text\": \"hello world\", \"reasoning\": \"...\", \"confidence\": 0.9}
-- **keypress**: {\"action\": \"keypress\", \"key\": \"enter\", \"reasoning\": \"...\", \"confidence\": 0.9}
-- **open-url**: {\"action\": \"open-url\", \"url\": \"https://google.com\", \"reasoning\": \"...\", \"confidence\": 0.9}
+### AUDIO & CLARITY:
+1. **Unclear Audio**: If the audio is too noisy or the user's request is unintelligible, DO NOT guess. Instead, politely ask: "I'm sorry, I didn't catch that. Could you please re-record or type your request?"
+2. **Don't Spell Names**: If you are unsure of a name or word pronunciation from audio, **do not attempt to spell it out** or guess.
+3. **Suggest Typing**: If you encounter a name or feature you can't pronounce or identify perfectly, **suggest that the user types it** instead.
+4. **WhatsApp Calling**: When asked to call someone, follow this flow:
+   - Step 1: Use the whatsapp-call action with a \`callType\` field (\`"audio"\` or \`"video"\`) based on what the user asked for.
+     Example: \`\`\`json
+     { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
+     \`\`\`
+   - Step 2: Once the chat is open, a screenshot is captured. In the next vision turn:
+     - Find the **video/camera icon** in the top-right of the chat header (it has a small dropdown arrow next to it).
+     - Click the video icon — a small sub-menu appears below it with two options:
+       - **"Audio call"** (phone/headset icon)
+       - **"Video call"** (video camera icon)
+     - If \`callType\` is \`"audio"\`, click **"Audio call"**. If \`callType\` is \`"video"\`, click **"Video call"**.
+   - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
+9. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
+8. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
 `;
 
-export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
+export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'assistant',
-      content: "Hello! I'm GemDesk AI. Enable \"Share Screen with AI\" to let me see your screen and perform actions for you.",
+      content: "Hello! I'm GemDesk AI. I can control your computer, open apps, manage files, navigate WhatsApp, and more. Enable \"Share Screen with AI\" to let me see your screen.",
       timestamp: new Date()
     }
   ]);
@@ -230,17 +150,28 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   
-  // Chat History State
+  const [draftedDocument, setDraftedDocument] = useState<{ content: string; filename: string } | null>(null);
+  const [showDocumentPreview, setShowDocumentPreview] = useState(false);
+  
   const [chats, setChats] = useState<Chat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [showSkills, setShowSkills] = useState(false);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [micStream, setMicStream] = useState<MediaStream | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const audioMimeTypeRef = useRef<string>('audio/webm');
 
-  // Load chats on mount
+  useEffect(() => {
+    if (autoStartRecording && !isRecording) {
+      startRecording();
+    }
+  }, [autoStartRecording]);
+
   useEffect(() => {
     loadChats();
   }, []);
@@ -255,8 +186,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     if (newChat) {
         setCurrentChatId(newChat._id);
         setMessages([{
-            id: '1',
-            role: 'assistant',
+            id: '1', role: 'assistant',
             content: "Hello! I'm GemDesk AI. I'm ready to help.",
             timestamp: new Date()
         }]);
@@ -267,25 +197,13 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
 
   const loadChatSession = async (chatId: string) => {
     const loadedMessages = await ChatService.getMessages(chatId);
-    // Map DB messages to UI messages
     const uiMessages: Message[] = loadedMessages.map((msg: any) => ({
-        id: msg.id,
-        role: msg.role,
-        content: msg.content,
+        id: msg.id, role: msg.role, content: msg.content,
         timestamp: new Date(msg.created_at),
-        transcription: msg.transcription,
-        language: msg.language,
-        // attachment: msg.attachment_url // TODO: Handle attachments if we save them
+        transcription: msg.transcription, language: msg.language,
     }));
-    
     if (uiMessages.length === 0) {
-        // Fallback for empty chat
-         setMessages([{
-            id: '1',
-            role: 'assistant',
-            content: "Hello! Resuming chat...",
-            timestamp: new Date()
-        }]);
+        setMessages([{ id: '1', role: 'assistant', content: "Hello! Resuming chat...", timestamp: new Date() }]);
     } else {
         setMessages(uiMessages);
     }
@@ -303,17 +221,13 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     }
   };
 
-
-  // Fetch device info
   useEffect(() => {
     const fetchDeviceInfo = async () => {
       if (window.electron?.getDeviceInfo) {
         try {
           const info = await window.electron.getDeviceInfo();
           setDeviceName(info.hostname || info.username || 'Developer');
-        } catch (e) {
-          console.error("Failed to fetch device info", e);
-        }
+        } catch (e) {}
       }
     };
     fetchDeviceInfo();
@@ -323,41 +237,20 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, pendingAction]);
 
-  // Handle continuous monitoring
   useEffect(() => {
     let cleanup: (() => void) | undefined;
-
     const startSession = async () => {
       if (shareScreen && window.electron?.startMonitoring) {
         await window.electron.startMonitoring();
-        
-        // Listen for screen updates
         window.electron.onScreenUpdate((data: any) => {
-          // In a real implementation, we might auto-send this to Gemini 
-          // if we are in an "active agent" mode. 
-          // For now, we just update the view or logs.
           console.log('Screen updated:', data.timestamp);
         });
-
-        cleanup = () => {
-          if (window.electron?.stopMonitoring) {
-            window.electron.stopMonitoring();
-          }
-        };
+        cleanup = () => { if (window.electron?.stopMonitoring) window.electron.stopMonitoring(); };
       }
     };
-
-    if (shareScreen) {
-      startSession();
-    } else {
-      if (window.electron?.stopMonitoring) {
-        window.electron.stopMonitoring();
-      }
-    }
-
-    return () => {
-      cleanup?.();
-    };
+    if (shareScreen) startSession();
+    else if (window.electron?.stopMonitoring) window.electron.stopMonitoring();
+    return () => { cleanup?.(); };
   }, [shareScreen]);
 
   const parseActions = (text: string): Action | null => {
@@ -366,8 +259,6 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
       if (jsonMatch) {
         const json = JSON.parse(jsonMatch[1]);
         const type = json.action || json.type;
-        
-        // Normalize the action object
         const action: Action = {
             type: type,
             target: json.target,
@@ -375,11 +266,18 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
             key: json.key,
             app: json.app || (type === 'launch' ? (typeof json.target === 'string' ? json.target : json.name) : undefined),
             url: json.url || (type === 'open-url' ? (typeof json.target === 'string' ? json.target : undefined) : undefined),
+            content: json.content,
+            filename: json.filename,
+            path: json.path,
+            oldPath: json.oldPath,
+            newPath: json.newPath,
+            days: json.days,
+            contact: json.contact,
+            message: json.message,
             reasoning: json.reasoning || 'Executing action...',
             confidence: json.confidence || 0.8,
             originalJson: json
         };
-        
         return action;
       }
     } catch (e) {
@@ -390,28 +288,45 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
 
   const startRecording = async () => {
     try {
+      console.log('[Voice] Requesting microphone access...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+      setMicStream(stream);
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+        ? 'audio/webm;codecs=opus' 
+        : 'audio/webm';
+      audioMimeTypeRef.current = mimeType;
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
+          console.log(`[Voice] Received data chunk: ${event.data.size} bytes`);
         }
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        console.log('[Voice] Recording stopped. Finalizing blob...');
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        
+        if (blob.size < 500) {
+           console.warn('[Voice] Recording too small, ignoring.', blob.size);
+           setAudioBlob(null);
+           setMicStream(null);
+           return;
+        }
+
         setAudioBlob(blob);
-        // Auto-send when recording stops
+        setMicStream(null);
         setTimeout(() => handleSendMessage(undefined, blob), 300);
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(1000); // 1s chunks
       setIsRecording(true);
+      console.log('[Voice] Recording started.');
     } catch (err) {
-      console.error("Failed to start recording", err);
+      console.error("[Voice] Failed to start recording:", err);
     }
   };
 
@@ -419,46 +334,26 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-      // Stop all tracks
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      setMicStream(null);
     }
   };
 
   const speak = useCallback((text: string, lang?: string) => {
     if (isMuted || !text) return;
-    
-    // Stop any current speech
     window.speechSynthesis.cancel();
-    
     const utterance = new SpeechSynthesisUtterance(text);
-    
-    if (lang) {
-        utterance.lang = lang;
-        console.log(`Setting TTS language to: ${lang}`);
-    }
-
+    if (lang) utterance.lang = lang;
     const voices = window.speechSynthesis.getVoices();
-    
-    // If a specific language is requested, try to find a voice for it
     let preferredVoice = null;
-    if (lang) {
-        preferredVoice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-    }
-    
-    // Fallback to Google/Premium preference if no specific lang voice or if lang not set
-    if (!preferredVoice) {
-        preferredVoice = voices.find(v => v.name.includes('Google') || v.name.includes('Premium')) || voices[0];
-    }
-    
+    if (lang) preferredVoice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+    if (!preferredVoice) preferredVoice = voices.find(v => v.name.includes('Google') || v.name.includes('Premium')) || voices[0];
     if (preferredVoice) utterance.voice = preferredVoice;
-    
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
-    
     utterance.onstart = () => setIsSpeaking(true);
     utterance.onend = () => setIsSpeaking(false);
     utterance.onerror = () => setIsSpeaking(false);
-    
     window.speechSynthesis.speak(utterance);
   }, [isMuted]);
 
@@ -467,10 +362,57 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     setIsSpeaking(false);
   }, []);
 
-  const handleSendMessage = async (e?: React.FormEvent, overrideAudio?: Blob) => {
+  const handleSendMessage = async (e?: React.FormEvent, overrideAudio?: Blob, overrideParts?: any[]) => {
     if (e) e.preventDefault();
+    
+    // If overrideParts provided, send directly to Gemini (used for vision loops)
+    if (overrideParts) {
+      setIsLoading(true);
+      try {
+        const result = await geminiService.generateContent({
+          model: "gemini-2.5-flash",
+          config: { systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] } },
+          contents: [{ role: "user", parts: overrideParts }]
+        });
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
+        const cleanContent = text.replace(/```json[\s\S]*?```/g, '').trim();
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(), role: 'assistant',
+          content: cleanContent || text,
+          timestamp: new Date()
+        }]);
+        const action = parseActions(text);
+        if (action) { setPendingAction(action); setTimeout(() => executeAction(action), 500); }
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     const currentAudio = overrideAudio || audioBlob;
     if (!input.trim() && !shareScreen && !attachedImage && !currentAudio) return;
+
+    // Silence detection for audio
+    if (currentAudio && !input.trim()) {
+        try {
+            console.log(`[Audio] Analysis complete. Size: ${currentAudio.size}`);
+
+            // Simplified validation: only check if we have some data
+            if (currentAudio.size < 100) {
+              throw new Error("Recording too short or contains no data.");
+            }
+        } catch (err: any) {
+            console.error("[Audio] Analysis error:", err);
+            setMessages(prev => [...prev, {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content: "I couldn't process that recording. " + (err.message || "The message was not recorded correctly."),
+                timestamp: new Date()
+            }]);
+            setIsLoading(false); setAudioBlob(null); setMicStream(null);
+            return;
+        }
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -481,7 +423,6 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
       audioUrl: currentAudio ? URL.createObjectURL(currentAudio) : undefined
     };
 
-    // OPTIMISTIC UI: Update messages and clear input immediately
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setAttachedImage(null);
@@ -489,8 +430,12 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     setIsLoading(true);
     setPendingAction(null);
 
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+
     try {
-      // Perform background operations asynchronously
       const handleBackgroundTasks = async () => {
         let activeChatId = currentChatId;
         if (!activeChatId) {
@@ -501,84 +446,53 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                 loadChats();
             }
         }
-
         if (activeChatId) {
-            ChatService.saveMessage({
-                chat_id: activeChatId,
-                role: 'user',
-                content: userMessage.content,
-            });
+            ChatService.saveMessage({ chat_id: activeChatId, role: 'user', content: userMessage.content });
         }
         return activeChatId;
       };
 
-      // Start tasks but don't block the UI update
       const activeChatIdPromise = handleBackgroundTasks();
 
       let screenshot = null;
-      if (shareScreen) {
-        if (typeof window !== 'undefined' && window.electron && window.electron.captureScreenshot) {
-          screenshot = await window.electron.captureScreenshot();
-        }
+      if (shareScreen && window.electron?.captureScreenshot) {
+        screenshot = await window.electron.captureScreenshot();
       }
 
       const parts: any[] = [];
       if (input) parts.push({ text: input });
       
-      // Handle Audio Data
       if (currentAudio) {
         const reader = new FileReader();
         const audioBase64Promise = new Promise<string>((resolve) => {
-          reader.onloadend = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            resolve(base64);
-          };
+          reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
           reader.readAsDataURL(currentAudio);
         });
-        
         const audioBase64 = await audioBase64Promise;
-        parts.push({
-          inlineData: {
-            data: audioBase64,
-            mimeType: "audio/webm"
-          }
-        });
+        // Use the actual recorded mimeType so Gemini gets the correct format
+        const recordedMimeType = audioMimeTypeRef.current || 'audio/webm';
+        parts.push({ inlineData: { data: audioBase64, mimeType: recordedMimeType } });
       }
 
       if (shareScreen && screenshot) {
-        parts.push({
-          inlineData: {
-            data: screenshot.split(',')[1],
-            mimeType: "image/png"
-          }
-        });
+        parts.push({ inlineData: { data: screenshot.split(',')[1], mimeType: "image/png" } });
       }
       if (attachedImage) {
-        parts.push({
-          inlineData: {
-            data: attachedImage.split(',')[1],
-            mimeType: "image/png"
-          }
-        });
+        parts.push({ inlineData: { data: attachedImage.split(',')[1], mimeType: "image/png" } });
       }
 
       const result = await geminiService.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-2.5-flash",
         config: {
-          systemInstruction: {
-            parts: [{ text: SYSTEM_PROMPT }]
-          }
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }
         },
         contents: [{ role: "user", parts }]
       });
 
       const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
       
-      // Extract transcription if present
       const transcriptionMatch = text.match(/TRANSCRIPTION:\s*(.*)/);
       const transcription = transcriptionMatch ? transcriptionMatch[1] : undefined;
-
-      // Extract language if present
       const languageMatch = text.match(/LANGUAGE:\s*([a-zA-Z-]+)/);
       const language = languageMatch ? languageMatch[1].trim() : undefined;
 
@@ -588,17 +502,20 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
         .replace(/```json[\s\S]*?```/g, '')
         .trim();
 
-      // Update user message with transcription if we got one and it was a voice message
+      // Use transcription as user message label if it exists (shows what AI heard)
       if (transcription && !input) {
         setMessages(prev => prev.map(msg => 
-          msg.id === userMessage.id ? { ...msg, content: transcription } : msg
+          msg.id === userMessage.id ? { ...msg, content: `🗣️ ${transcription}` } : msg
+        ));
+      } else if (currentAudio && !input && !transcription) {
+        // No transcription from AI - update content from "Processing voice..." to a generic label
+        setMessages(prev => prev.map(msg => 
+          msg.id === userMessage.id ? { ...msg, content: '🎤 Voice message' } : msg
         ));
       }
 
-      // Parse for actions
       const action = parseActions(text);
       if (action) {
-        // Fix for launch action if target is used instead of app
         if (action.type === 'launch' && !action.app && action.target) {
           action.app = typeof action.target === 'string' ? action.target : undefined;
         }
@@ -610,35 +527,29 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
         role: 'assistant',
         content: cleanContent || (action ? `Executing ${action.type}...` : text),
         timestamp: new Date(),
-        screenshot: undefined, // Don't return captured frame in chat
-        language: language // Store detected language
+        language: language
       };
 
       setMessages(prev => [...prev, aiMessage]);
+      speak(cleanContent, language);
 
-      // Wait for chat creation if needed before saving AI response
       const finalChatId = await activeChatIdPromise;
-
-      // SAVE AI MESSAGE
       if (finalChatId) {
         await ChatService.saveMessage({
-            chat_id: finalChatId,
-            role: 'assistant',
-            content: aiMessage.content,
-            transcription: transcription,
-            language: language,
-            action_json: action
+            chat_id: finalChatId, role: 'assistant',
+            content: aiMessage.content, transcription, language, action_json: action
         });
-        loadChats(); // Refresh history
+        loadChats();
       }
 
-      // AUTO-EXECUTE: If an action specifically for 'launch' was parsed, execute it immediately.
-      // This hides the manual approval step for launches as requested.
-      if (action && action.type === 'launch') {
-        console.log("[AIWorkspace] Auto-executing 'launch' action:", action.app);
-        setTimeout(() => {
-          executeAction(action);
-        }, 500);
+      // Auto-execute safe actions immediately
+      const autoExecActions = [
+        'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 
+        'open-url', 'write-file', 'delete-file', 'save-document', 
+        'create-project', 'create-doc', 'open-path'
+      ];
+      if (action && autoExecActions.includes(action.type)) {
+        setTimeout(() => executeAction(action), 500);
       }
     } catch (error: any) {
       console.error("AI Error:", error);
@@ -653,7 +564,6 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     }
   };
 
-
   const executeAction = async (directAction?: Action) => {
     const actionToRun = directAction || pendingAction;
     if (!actionToRun) return;
@@ -661,34 +571,111 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     setActionStatus('executing');
     try {
       if (window.electron && window.electron.executeAction) {
-        // @ts-ignore
         const { originalJson, ...sanitizedAction } = actionToRun;
         const result = await window.electron.executeAction(sanitizedAction);
-        
 
         if (result.success) {
             setActionStatus('success');
+            
+            if (actionToRun.type === 'capture-browser') {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'assistant',
+                    content: `Captured sandbox screenshot: ![Sandbox screenshot](${result.data})`,
+                    timestamp: new Date()
+                }]);
+            }
+            if (actionToRun.type === 'save-document') {
+                if (actionToRun.silent) {
+                    setMessages(prev => [...prev, {
+                        id: Date.now().toString(), role: 'assistant',
+                        content: `Document saved successfully as ${actionToRun.filename}.`,
+                        timestamp: new Date()
+                    }]);
+                } else {
+                    setDraftedDocument({ content: actionToRun.content || '', filename: actionToRun.filename || 'document.txt' });
+                    setShowDocumentPreview(true);
+                }
+            }
+            if (actionToRun.type === 'create-folder') {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'assistant',
+                    content: `✅ Folder created: \`${actionToRun.path}\``,
+                    timestamp: new Date()
+                }]);
+            }
+            if (actionToRun.type === 'whatsapp-chat') {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'assistant',
+                    content: `✅ Navigated to WhatsApp chat: **${actionToRun.contact}**`,
+                    timestamp: new Date()
+                }]);
+            }
+            if (actionToRun.type === 'whatsapp-call' && result.screenshot) {
+                // Automatically trigger AI vision to click the correct call type icon
+                const callType = (actionToRun as any).callType || actionToRun.originalJson?.callType || 'audio';
+                const callLabel = callType === 'video' ? 'Video call' : 'Audio call';
+                setTimeout(async () => {
+                    setMessages(prev => [...prev, {
+                        id: Date.now().toString(), role: 'assistant',
+                        content: `✅ Opened WhatsApp chat with **${actionToRun.contact}**. Now identifying the call icon...`,
+                        timestamp: new Date()
+                    }]);
+                    const base64 = result.screenshot.split(',')[1];
+                    const visionParts: any[] = [
+                        { text: `This is a screenshot of WhatsApp after opening a chat with ${actionToRun.contact}. Look at the top-right of the chat header. You will see a video/camera icon (it may have a small dropdown arrow next to it). Click that video icon — a small sub-menu will appear below it showing two options: "Audio call" (with a phone/headset icon) and "Video call" (with a video camera icon). The user wants a ${callType} call, so click "${callLabel}" from that sub-menu.` },
+                        { inlineData: { data: base64, mimeType: 'image/jpeg' } }
+                    ];
+                    await handleSendMessage(undefined, undefined, visionParts);
+                }, 2000);
+            } else if (actionToRun.type === 'whatsapp-call') {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'assistant',
+                    content: `✅ Opened WhatsApp chat with **${actionToRun.contact}**. Enable screen sharing so I can find the call icon.`,
+                    timestamp: new Date()
+                }]);
+            }
+            if (actionToRun.background && window.electron.focusWindow) {
+                window.electron.focusWindow();
+            }
+
             setTimeout(() => {
                 setPendingAction(null);
                 setActionStatus('idle');
-                // Optional: Auto-follow up
-                setMessages(prev => [...prev, {
-                    id: Date.now().toString(),
-                    role: 'assistant',
-                    content: `${actionToRun.reasoning}`, // Removed the green mark/icon
-                    timestamp: new Date()
-                }]);
+                if (!actionToRun.silent && !['create-folder','whatsapp-chat','whatsapp-call','save-document','capture-browser','open-path'].includes(actionToRun.type)) {
+                    setMessages(prev => [...prev, {
+                        id: Date.now().toString(), role: 'assistant',
+                        content: `${actionToRun.reasoning}`,
+                        timestamp: new Date()
+                    }]);
+                }
             }, 3000);
         } else {
             console.error('Action execution failed:', result.error);
             setActionStatus('error');
+            setMessages(prev => [...prev, {
+                id: Date.now().toString(), role: 'assistant',
+                content: `❌ Action failed: ${result.error}`,
+                timestamp: new Date()
+            }]);
         }
       } else {
         throw new Error('Electron interface unavailable');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Action failed:', e);
       setActionStatus('error');
+    }
+  };
+
+  const runSkill = async (skill: any) => {
+    setShowSkills(false);
+    setMessages(prev => [...prev, {
+        id: Date.now().toString(), role: 'assistant',
+        content: `Running skill: **${skill.name}**...`, timestamp: new Date()
+    }]);
+    for (const action of skill.actions) {
+        await executeAction(action);
+        await new Promise(resolve => setTimeout(resolve, 1000));
     }
   };
 
@@ -696,9 +683,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => {
-        setAttachedImage(event.target?.result as string);
-      };
+      reader.onload = (event) => setAttachedImage(event.target?.result as string);
       reader.readAsDataURL(file);
     }
   };
@@ -709,9 +694,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
        <AnimatePresence>
          {showHistory && (
            <motion.div 
-             initial={{ x: -300, opacity: 0 }}
-             animate={{ x: 0, opacity: 1 }}
-             exit={{ x: -300, opacity: 0 }}
+             initial={{ x: -300, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -300, opacity: 0 }}
              className="absolute top-0 left-0 h-full w-64 bg-[#111] border-r border-white/10 z-50 flex flex-col shadow-2xl"
            >
               <div className="p-4 border-b border-white/5 flex justify-between items-center">
@@ -721,11 +704,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                  </Button>
               </div>
               <div className="p-2">
-                 <Button 
-                    className="w-full justify-start gap-2 mb-2" 
-                    variant="outline" 
-                    onClick={createNewChat}
-                 >
+                 <Button className="w-full justify-start gap-2 mb-2" variant="outline" onClick={createNewChat}>
                     <Plus className="w-4 h-4" /> New Chat
                  </Button>
               </div>
@@ -742,9 +721,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                                 <span className="text-xs truncate">{chat.title || 'Untitled Chat'}</span>
                             </div>
                             <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                                variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
                                 onClick={(e) => deleteChat(e, chat._id)}
                             >
                                 <Trash2 className="w-3 h-3 text-red-400" />
@@ -755,12 +732,9 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
               </ScrollArea>
            </motion.div>
          )}
-         {/* Backdrop */}
          {showHistory && (
             <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="absolute inset-0 bg-black/50 z-40 backdrop-blur-sm"
                 onClick={() => setShowHistory(false)}
             />
@@ -783,37 +757,35 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-4">
+          {draftedDocument && (
+            <Button 
+              variant="outline" size="sm" onClick={() => setShowDocumentPreview(!showDocumentPreview)}
+              className={`text-xs gap-2 ${showDocumentPreview ? 'bg-primary/10 border-primary/30' : 'bg-white/5 border-white/10'}`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              {showDocumentPreview ? 'Hide Document' : 'View Document'}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="gap-2 bg-white/5 border-white/10" onClick={() => setShowSkills(true)}>
+              <Zap className="w-4 h-4 text-primary" /> Skills
+          </Button>
           <div className="flex items-center space-x-2 bg-white/5 px-3 py-1.5 rounded-md border border-white/5">
             <Checkbox 
-              id="share-screen-ai" 
-              checked={shareScreen} 
+              id="share-screen-ai" checked={shareScreen} 
               onCheckedChange={(checked) => setShareScreen(checked as boolean)}
               className="border-white/20 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
             />
-            <label 
-              htmlFor="share-screen-ai"
-              className="text-xs font-medium leading-none cursor-pointer flex items-center gap-2"
-            >
-              <Monitor className="w-3.5 h-3.5 text-primary" />
-              Share Screen with AI
+            <label htmlFor="share-screen-ai" className="text-xs font-medium leading-none cursor-pointer flex items-center gap-2">
+              <Monitor className="w-3.5 h-3.5 text-primary" /> Share Screen with AI
             </label>
           </div>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-widest bg-white/5 px-2 py-1 rounded">
-            <ShieldCheck className="w-3 h-3 text-green-500/50" />
-            Encrypted Session
+            <ShieldCheck className="w-3 h-3 text-green-500/50" /> Encrypted Session
           </div>
-
           <Button 
-            variant="ghost" 
-            size="icon" 
-            onClick={() => {
-              if (isSpeaking) {
-                stopSpeaking();
-              } else {
-                setIsMuted(!isMuted);
-              }
-            }} 
+            variant="ghost" size="icon"
+            onClick={() => { if (isSpeaking) stopSpeaking(); else setIsMuted(!isMuted); }} 
             className={`h-8 w-8 rounded-full transition-all ${isSpeaking ? 'bg-primary/20 text-primary border border-primary/30' : 'hover:bg-white/5'}`}
           >
             {isSpeaking ? (
@@ -831,7 +803,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
         </div>
       </div>
 
-      {/* Main Chat Area */}
+      {/* Chat Area */}
       <div className="flex-1 overflow-hidden relative">
         <ScrollArea className="h-full px-6 py-8">
           <div className="max-w-3xl mx-auto space-y-8 pb-32">
@@ -855,26 +827,41 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                         </div>
                       )}
                       <span className="text-[10px] font-mono text-muted-foreground uppercase flex items-center gap-1.5">
-                        {message.role === 'assistant' ? (
-                          'GemDesk AI'
-                        ) : (
-                          <>
-                            <Monitor className="w-2.5 h-2.5" />
-                            {deviceName}
-                          </>
-                        )}
+                        {message.role === 'assistant' ? 'GemDesk AI' : <><Monitor className="w-2.5 h-2.5" />{deviceName}</>}
                       </span>
                     </div>
-
-                    <div className={`
-                      p-4 rounded-lg border text-sm leading-relaxed
-                      ${message.role === 'user' 
+                    <div className={`p-4 rounded-lg border text-sm leading-relaxed ${
+                      message.role === 'user' 
                         ? 'bg-[#1A1A1A] border-white/10 text-foreground' 
-                        : 'bg-[#0E0E0E] border-white/5 text-foreground/90 shadow-2xl'}
-                    `}>
+                        : 'bg-[#0E0E0E] border-white/5 text-foreground/90 shadow-2xl'
+                    }`}>
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
+                          p({children, ...props}: any) {
+                            return <p className="mb-2 last:mb-0 leading-relaxed" {...props}>{children}</p>;
+                          },
+                          h1({children, ...props}: any) {
+                            return <h1 className="text-base font-semibold mb-2 mt-3 text-white" {...props}>{children}</h1>;
+                          },
+                          h2({children, ...props}: any) {
+                            return <h2 className="text-sm font-semibold mb-1.5 mt-2.5 text-white/90" {...props}>{children}</h2>;
+                          },
+                          h3({children, ...props}: any) {
+                            return <h3 className="text-xs font-semibold mb-1 mt-2 text-white/80" {...props}>{children}</h3>;
+                          },
+                          ul({children, ...props}: any) {
+                            return <ul className="list-disc pl-4 mb-2 space-y-0.5" {...props}>{children}</ul>;
+                          },
+                          ol({children, ...props}: any) {
+                            return <ol className="list-decimal pl-4 mb-2 space-y-0.5" {...props}>{children}</ol>;
+                          },
+                          li({children, ...props}: any) {
+                            return <li className="leading-relaxed" {...props}>{children}</li>;
+                          },
+                          strong({children, ...props}: any) {
+                            return <strong className="font-semibold text-white" {...props}>{children}</strong>;
+                          },
                           code({node, inline, className, children, ...props}: any) {
                             const match = /language-(\w+)/.exec(className || '');
                             return !inline && match ? (
@@ -883,40 +870,28 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                                   <span className="text-xs text-muted-foreground">{match[1]}</span>
                                 </div>
                                 <div className="p-3 overflow-x-auto">
-                                  <code className={className} {...props}>
-                                    {children}
-                                  </code>
+                                  <code className={className} {...props}>{children}</code>
                                 </div>
                               </div>
                             ) : (
-                              <code className={`${className} bg-white/10 rounded px-1 py-0.5`} {...props}>
-                                {children}
-                              </code>
+                              <code className={`${className} bg-white/10 rounded px-1 py-0.5 text-xs`} {...props}>{children}</code>
                             );
                           }
                         }}
                       >
-                        {message.content} 
+                        {message.content}
                       </ReactMarkdown>
-                      
-                      {message.audioUrl && (
-                        <VoiceMessagePlayer audioUrl={message.audioUrl} />
-                      )}
-
+                      {message.audioUrl && <VoiceMessagePlayer audioUrl={message.audioUrl} />}
                       {message.attachment && (
                         <div className="mt-4 rounded border border-white/10 overflow-hidden">
                           <img src={message.attachment} alt="Upload" className="max-h-64 object-contain" />
                         </div>
                       )}
-                      
                       {message.role === 'assistant' && (
                         <div className="mt-2 flex justify-end">
                            <Button 
-                             variant="ghost" 
-                             size="sm" 
-                             className="h-6 w-6 p-0 hover:bg-white/10 text-muted-foreground"
-                             onClick={() => speak(message.content, message.language)}
-                             title="Read aloud"
+                             variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-white/10 text-muted-foreground"
+                             onClick={() => speak(message.content, message.language)} title="Read aloud"
                            >
                               <Volume2 className="w-3.5 h-3.5" />
                            </Button>
@@ -928,7 +903,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
               ))}
             </AnimatePresence>
             
-            {/* Seamless Action Status Indicator */}
+            {/* Action Status Indicator */}
             {pendingAction && (
                 <motion.div 
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -942,6 +917,7 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                             {pendingAction.type === 'type' && <Keyboard className="w-4 h-4 text-primary" />}
                             {pendingAction.type === 'launch' && <Play className="w-4 h-4 text-primary" />}
                             {pendingAction.type === 'open-url' && <Globe className="w-4 h-4 text-primary" />}
+                            {pendingAction.type === 'create-folder' && <FolderPlus className="w-4 h-4 text-primary" />}
                         </div>
                         <div className="flex-1">
                             <div className="text-[10px] text-muted-foreground uppercase tracking-tight font-semibold">
@@ -961,14 +937,9 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                     </div>
                 </motion.div>
             )}
-                        
 
             {isLoading && (
-              <motion.div 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
-                className="flex justify-start"
-              >
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
                 <div className="flex flex-col items-start">
                   <div className="flex items-center gap-2 mb-2 px-1">
                     <div className="w-5 h-5 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
@@ -997,14 +968,12 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
           {attachedImage && (
             <div className="mb-4 relative inline-block">
               <img src={attachedImage} className="w-20 h-20 object-cover rounded border border-white/20" />
-              <button 
-                onClick={() => setAttachedImage(null)}
-                className="absolute -top-2 -right-2 bg-red-500 rounded-full p-1 shadow-lg"
-              >
+              <button onClick={() => setAttachedImage(null)} className="absolute -top-2 -right-2 bg-red-500 rounded-full p-1 shadow-lg">
                 <X className="w-3 h-3 text-white" />
               </button>
             </div>
           )}
+          {isRecording && <VoiceVisualizer stream={micStream} isRecording={isRecording} />}
 
           <form 
             onSubmit={handleSendMessage}
@@ -1012,21 +981,14 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
           >
             <div className="flex gap-1 mb-1 ml-1">
               <Button 
-                type="button" 
-                variant="ghost" 
-                size="icon" 
+                type="button" variant="ghost" size="icon"
                 className="h-9 w-9 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                onClick={() => {
-                  const input = fileInputRef.current;
-                  if (input) input.click();
-                }}
+                onClick={() => { const inp = fileInputRef.current; if (inp) inp.click(); }}
               >
                 <ImageIcon className="w-4 h-4" />
               </Button>
               <Button 
-                type="button" 
-                variant="ghost" 
-                size="icon" 
+                type="button" variant="ghost" size="icon"
                 className={`h-9 w-9 relative transition-colors ${isRecording ? 'text-red-500 bg-red-500/10' : 'text-muted-foreground hover:text-primary hover:bg-primary/10'}`}
                 onClick={isRecording ? stopRecording : startRecording}
               >
@@ -1045,13 +1007,18 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
             <textarea
               rows={1}
               ref={(el) => {
+                textareaRef.current = el;
                 if (el) {
                   el.style.height = 'auto';
                   el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
                 }
               }}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                e.target.style.height = 'auto';
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 128)}px`;
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -1059,21 +1026,14 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
                 }
               }}
               placeholder={shareScreen ? "Explain what's on my screen..." : "Ask GemDesk AI anything..."}
-              className="flex-1 bg-transparent border-none text-sm py-2.5 outline-none resize-none overflow-y-auto max-h-32 min-h-[40px] placeholder:text-muted-foreground/50 transition-[height] duration-200"
+              className="flex-1 bg-transparent border-none text-sm py-2.5 outline-none resize-none overflow-y-auto max-h-32 min-h-[40px] placeholder:text-muted-foreground/50"
             />
 
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              className="hidden" 
-              accept="image/*" 
-              onChange={handleFileUpload} 
-            />
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
 
             <Button 
-              type="submit" 
-              size="icon" 
-              disabled={isLoading || (!input.trim() && !shareScreen && !attachedImage)}
+              type="submit" size="icon"
+              disabled={isLoading || (!input.trim() && !shareScreen && !attachedImage && !audioBlob)}
               className="bg-primary hover:bg-primary/90 text-white h-9 w-9 rounded-lg shadow-lg shadow-primary/20"
             >
               <Send className="w-4 h-4" />
@@ -1087,12 +1047,49 @@ export default function AIWorkspace({ onBack }: AIWorkspaceProps) {
             </div>
             <div className="flex items-center gap-1.5 opacity-40">
               <Monitor className="w-2.5 h-2.5" />
-              <span>Gemini 3 Flash</span>
+              <span>Gemini 2.5 Flash</span>
             </div>
           </div>
         </div>
       </div>
       </div>
+
+      {/* Document Preview Split Panel */}
+      <AnimatePresence>
+        {showDocumentPreview && draftedDocument && (
+            <motion.div 
+              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 20, stiffness: 100 }}
+              className="w-1/3 h-full bg-[#0E0E0E] border-l border-white/10 flex flex-col z-20 shadow-2xl"
+            >
+               <div className="p-4 border-b border-white/10 flex justify-between items-center bg-[#141414]">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-primary" />
+                    <h3 className="font-semibold text-sm truncate max-w-[150px]">{draftedDocument.filename}</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="sm" className="text-xs h-7 hover:bg-white/5" onClick={async () => {
+                       await window.electron.writeFile(`C:\\Users\\ADMIN\\Documents\\${draftedDocument.filename}`, draftedDocument.content);
+                    }}>Save</Button>
+                    <Button variant="ghost" size="icon" onClick={() => setShowDocumentPreview(false)}>
+                        <X className="w-4 h-4" />
+                    </Button>
+                  </div>
+               </div>
+               <ScrollArea className="flex-1 p-6">
+                  <div className="prose prose-invert max-w-none">
+                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{draftedDocument.content}</ReactMarkdown>
+                  </div>
+               </ScrollArea>
+            </motion.div>
+        )}
+       </AnimatePresence>
+
+       <AnimatePresence>
+          {showSkills && (
+              <SkillLibrary onTriggerSkill={runSkill} onClose={() => setShowSkills(false)} />
+          )}
+       </AnimatePresence>
     </div>
   );
 }

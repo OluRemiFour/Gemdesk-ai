@@ -52,9 +52,15 @@ export class AppLauncher {
                     'C:\\Program Files\\Sublime Text 3\\sublime_text.exe'
                 ],
                 // Office
-                'word': ['WINWORD.EXE', 'start winword'], 
+                'word': ['WINWORD.EXE', 'start winword'],
+                'microsoft word': ['WINWORD.EXE', 'start winword'],
+                'ms word': ['WINWORD.EXE', 'start winword'],
                 'excel': ['EXCEL.EXE', 'start excel'],
+                'microsoft excel': ['EXCEL.EXE', 'start excel'],
+                'ms excel': ['EXCEL.EXE', 'start excel'],
                 'powerpoint': ['POWERPNT.EXE', 'start powerpnt'],
+                'microsoft powerpoint': ['POWERPNT.EXE', 'start powerpnt'],
+                'ms powerpoint': ['POWERPNT.EXE', 'start powerpnt'],
                 // Utilities
                 'calculator': ['calc.exe'],
                 'calc': ['calc.exe'],
@@ -69,7 +75,15 @@ export class AppLauncher {
                 'postman': [
                     path.join(process.env.LOCALAPPDATA || '', 'Postman\\Postman.exe'),
                     path.join(process.env.LOCALAPPDATA || '', 'Postman\\app-11.81.4\\Postman.exe')
-                ]
+                ],
+                // System Folders
+                'documents': ['shell:Personal', path.join(os.homedir(), 'Documents')],
+                'downloads': ['shell:Downloads', path.join(os.homedir(), 'Downloads')],
+                'desktop': ['shell:Desktop', path.join(os.homedir(), 'Desktop')],
+                'pictures': ['shell:My Pictures', path.join(os.homedir(), 'Pictures')],
+                'videos': ['shell:My Video', path.join(os.homedir(), 'Videos')],
+                'music': ['shell:My Music', path.join(os.homedir(), 'Music')],
+                'recycle bin': ['shell:RecycleBinFolder']
             };
         }
         return {};
@@ -83,19 +97,64 @@ export class AppLauncher {
         return Object.keys(this.commonApps).concat(Array.from(this.customApps.keys()));
     }
 
-    async launchApp(appName, args = []) {
+    async focusWindowByTitle(titlePattern) {
+        if (os.platform() !== 'win32') return { success: false, error: 'Only supported on Windows' };
+        
+        const tryFocus = async () => {
+             try {
+                // Try finding by process name OR window title
+                const psCommand = `powershell "Get-Process | Where-Object {$_.ProcessName -like '*${titlePattern}*' -or $_.MainWindowTitle -like '*${titlePattern}*'} | Select-Object -ExpandProperty Id"`;
+                const { stdout } = await execPromise(psCommand);
+                const pids = stdout.trim().split(/\r?\n/).filter(Boolean);
+                
+                if (pids.length === 0) return { success: false };
+
+                const pid = pids[0];
+                // Enhanced Win32 focus script:
+                // 9 = RESTORE, 5 = SHOW, 3 = MAXIMIZE. We use 9 to restore if minimized.
+                const focusCommand = `powershell -Command "
+                    $signature = '[DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\\"user32.dll\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport(\\"user32.dll\\")] public static extern bool IsIconic(IntPtr hWnd);';
+                    $type = Add-Type -MemberDefinition $signature -Name 'Win32' -Namespace 'Win32Functions' -PassThru;
+                    $proc = Get-Process -Id ${pid};
+                    $handle = $proc.MainWindowHandle;
+                    if ($handle -ne [IntPtr]::Zero) {
+                        if ($type::IsIconic($handle)) { $type::ShowWindow($handle, 9) } 
+                        else { $type::ShowWindow($handle, 5) }
+                        $type::SetForegroundWindow($handle)
+                    }
+                "`;
+                await execPromise(focusCommand);
+                return { success: true };
+            } catch (e) {
+                return { success: false, error: e.message };
+            }
+        };
+
+        console.log(`[AppLauncher] Attempting robust focus: ${titlePattern}`);
+        for (let i = 0; i < 4; i++) {
+            const result = await tryFocus();
+            if (result.success) return { success: true, message: `Focused window: ${titlePattern}` };
+            await new Promise(r => setTimeout(r, 1500));
+        }
+        
+        return { success: false, error: `Window not found or could not be focused: ${titlePattern}` };
+    }
+
+    async launchApp(appName, args = [], options = {}) {
         if (!appName) return { success: false, error: 'App name is required' };
         
         const name = appName.trim();
+        const background = options.background || false;
         
         // 0. Check if it's an absolute path to a file or folder
         if (path.isAbsolute(name) && fs.existsSync(name)) {
             try {
                 if (os.platform() === 'win32') {
-                    // Use start command for folders and files
-                    await execPromise(`start "" "${name}"`);
+                    // Use start /min for background
+                    const cmd = background ? `start /min "" "${name}"` : `start "" "${name}"`;
+                    await execPromise(cmd);
                 } else {
-                    return this.execute(name, args);
+                    return this.execute(name, args, { background });
                 }
                 return { success: true, message: `Opened path: ${name}` };
             } catch (e) {
@@ -107,7 +166,7 @@ export class AppLauncher {
         
         // 1. Check custom apps
         if (this.customApps.has(nameLower)) {
-            return this.execute(this.customApps.get(nameLower), args);
+            return this.execute(this.customApps.get(nameLower), args, { background });
         }
 
         // 2. Check common apps map
@@ -117,21 +176,25 @@ export class AppLauncher {
                 // Handle special commands or shell: paths
                 if (candidate.startsWith('start ') || candidate.startsWith('shell:')) {
                      try {
-                        await this.execute(candidate, args);
+                        let finalCmd = candidate;
+                        if (background && candidate.startsWith('start ')) {
+                            finalCmd = candidate.replace('start ', 'start /min ');
+                        }
+                        await this.execute(finalCmd, args, { background });
                         return { success: true, message: `Launched ${name}` };
                      } catch (e) {
-                         console.log(`Failed to launch ${candidate}:`, e.message);
-                         continue;
+                        console.log(`Failed to launch ${candidate}:`, e.message);
+                        continue;
                      }
                 }
                 
                 // Handle file paths
                 if (path.isAbsolute(candidate) && fs.existsSync(candidate)) {
-                    return this.execute(candidate, args);
+                    return this.execute(candidate, args, { background });
                 } else if (!path.isAbsolute(candidate)) {
                     // Start relative/system commands
                      try {
-                        await this.execute(candidate, args);
+                        await this.execute(candidate, args, { background });
                         return { success: true, message: `Launched ${name}` };
                      } catch (e) {
                          continue;
@@ -142,7 +205,7 @@ export class AppLauncher {
 
         // 3. Try to execute directly (if it's in PATH)
         try {
-            await this.execute(name, args);
+            await this.execute(name, args, { background });
             return { success: true, message: `Launched ${name} from system PATH` };
         } catch (e) {
             // ignore
@@ -153,7 +216,8 @@ export class AppLauncher {
              try {
                 // use start command to let windows handle it
                 const argsStr = args.length > 0 ? ` ${args.map(a => `"${a}"`).join(' ')}` : '';
-                await execPromise(`start "" "${name}"${argsStr}`);
+                const baseCmd = background ? 'start /min' : 'start';
+                await execPromise(`${baseCmd} "" "${name}"${argsStr}`);
                 return { success: true, message: `Launched ${name} via 'start' command` };
             } catch (e) {
                 return { success: false, error: `Could not launch '${name}'. App not found.` };
@@ -163,12 +227,19 @@ export class AppLauncher {
         return { success: false, error: `App '${name}' not found.` };
     }
 
-    async execute(commandPath, args = []) {
+    async execute(commandPath, args = [], options = {}) {
+        const background = options.background || false;
+
         // Handle shell:AppsFolder or start commands
         if (commandPath.startsWith('shell:') || commandPath.startsWith('start ')) {
              const argsStr = args.length > 0 ? ` ${args.map(a => `"${a}"`).join(' ')}` : '';
-             const cmd = (commandPath.startsWith('start ') ? commandPath : `start ${commandPath}`) + argsStr;
-             await execPromise(cmd);
+             let finalCmd = commandPath.startsWith('start ') ? commandPath : `start ${commandPath}`;
+             
+             if (background && finalCmd.startsWith('start ') && !finalCmd.includes('/min')) {
+                 finalCmd = finalCmd.replace('start ', 'start /min ');
+             }
+
+             await execPromise(finalCmd + argsStr);
              return { success: true, message: `Executed ${commandPath}` };
         }
         
@@ -176,7 +247,9 @@ export class AppLauncher {
         return new Promise((resolve, reject) => {
              const subprocess = spawn(commandPath, args, {
                  detached: true,
-                 stdio: 'ignore'
+                 stdio: 'ignore',
+                 // Windows specific: hide window or launch minimized if possible via shell
+                 windowsHide: background 
              });
              
              subprocess.on('error', (err) => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Maximize2, Minimize2, Settings, Activity, MonitorOff, MousePointer, Keyboard, Eye, Loader2 } from 'lucide-react';
+import { X, Maximize2, Minimize2, Settings, Activity, MonitorOff, MousePointer, Keyboard, Eye, Loader2, Mic, MicOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
@@ -18,11 +18,15 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [quality, setQuality] = useState([75]);
-  const [controlEnabled, setControlEnabled] = useState(true);
+  const [mouseControlEnabled, setMouseControlEnabled] = useState(true);
+  const [keyboardControlEnabled, setKeyboardControlEnabled] = useState(true);
   const [fps, setFps] = useState(30);
   const [latency, setLatency] = useState(45);
   const [bandwidth, setBandwidth] = useState(2.4);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [remoteMicEnabled, setRemoteMicEnabled] = useState(false);
+  const [localAudioStream, setLocalAudioStream] = useState<MediaStream | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
@@ -62,13 +66,24 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       }
     });
 
+    socket.on('permissions-updated', ({ permissions }) => {
+      if (!isHost) {
+        const enabled = permissions === 'write';
+        setMouseControlEnabled(enabled);
+        setKeyboardControlEnabled(enabled);
+      }
+    });
+
+    socket.on('voice-status-updated', ({ enabled }) => {
+      setRemoteMicEnabled(enabled);
+    });
+
     // Remote Control Handling
     if (isHost) {
       socket.on('control-command', ({ command }) => {
-        if (controlEnabled) {
-          // @ts-ignore
-          window.electron.sendInput(command.type, command.data);
-        }
+        // Handle control permission check based on command type (optional enhancement)
+        // For now, we trust the viewer's UI or handle it globally
+        window.electron.sendInput(command.type, command.data);
       });
     }
 
@@ -83,10 +98,18 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       clearInterval(interval);
       peer.destroy();
     };
-  }, [isHost, socket, stream, controlEnabled]);
+  }, [isHost, socket, sessionId, stream]);
+
+  // Robust stream attachment
+  useEffect(() => {
+    if (remoteStream && videoRef.current) {
+      console.log('[ActiveSession] Attaching remote stream to video element');
+      videoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (isHost || !controlEnabled || !socket) return;
+    if (isHost || !mouseControlEnabled || !socket) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
@@ -97,7 +120,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   };
 
   const handleClick = (e: React.MouseEvent) => {
-    if (isHost || !controlEnabled || !socket) return;
+    if (isHost || !mouseControlEnabled || !socket) return;
     socket.emit('control-command', {
       sessionId,
       command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right' } }
@@ -105,7 +128,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (isHost || !controlEnabled || !socket) return;
+    if (isHost || !keyboardControlEnabled || !socket) return;
     socket.emit('control-command', {
       sessionId,
       command: { type: 'keydown', data: { key: e.key, code: e.code } }
@@ -113,7 +136,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   };
 
   const handleKeyUp = (e: React.KeyboardEvent) => {
-    if (isHost || !controlEnabled || !socket) return;
+    if (isHost || !keyboardControlEnabled || !socket) return;
     socket.emit('control-command', {
       sessionId,
       command: { type: 'keyup', data: { key: e.key, code: e.code } }
@@ -124,6 +147,37 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     if (confirm('Are you sure you want to end this session?')) {
       onEnd();
     }
+  };
+
+  const toggleMic = async () => {
+    try {
+      if (!micEnabled) {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setLocalAudioStream(audioStream);
+        if (peerRef.current) {
+          peerRef.current.addStream(audioStream);
+        }
+        setMicEnabled(true);
+        socket?.emit('voice-status', { sessionId, enabled: true });
+      } else {
+        localAudioStream?.getTracks().forEach(track => track.stop());
+        if (peerRef.current && localAudioStream) {
+          peerRef.current.removeStream(localAudioStream);
+        }
+        setLocalAudioStream(null);
+        setMicEnabled(false);
+        socket?.emit('voice-status', { sessionId, enabled: false });
+      }
+    } catch (err) {
+      console.error('Error toggling microphone:', err);
+    }
+  };
+
+  const togglePermissions = () => {
+    const nextPerm = mouseControlEnabled ? 'read' : 'write';
+    setMouseControlEnabled(nextPerm === 'write');
+    setKeyboardControlEnabled(nextPerm === 'write');
+    socket?.emit('toggle-permissions', { sessionId, permissions: nextPerm });
   };
 
   return (
@@ -137,8 +191,8 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
               {isHost ? 'Sharing Your Desktop' : 'Connected to Remote Desktop'}
             </span>
             {!isHost && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${controlEnabled ? 'bg-primary/20 text-primary border border-primary/30' : 'bg-muted text-muted-foreground'}`}>
-                {controlEnabled ? 'Write (Control)' : 'Read (View-Only)'}
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${(mouseControlEnabled || keyboardControlEnabled) ? 'bg-primary/20 text-primary border border-primary/30' : 'bg-muted text-muted-foreground'}`}>
+                {(mouseControlEnabled || keyboardControlEnabled) ? 'Write (Control)' : 'Read (View-Only)'}
               </span>
             )}
           </div>
@@ -157,6 +211,16 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
             <div className="border-l border-border pl-4">{latency}ms</div>
             <div className="border-l border-border pl-4">{bandwidth.toFixed(1)} MB/s</div>
           </div>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleMic}
+            className={`gap-2 ${micEnabled ? 'text-primary' : 'text-muted-foreground'}`}
+          >
+            {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            {micEnabled ? 'Mic On' : 'Mic Off'}
+          </Button>
 
           <Button
             variant="ghost"
@@ -276,14 +340,14 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
                         <MousePointer className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm">Mouse Control</span>
                       </div>
-                      <Switch checked={controlEnabled} onCheckedChange={setControlEnabled} />
+                      <Switch checked={mouseControlEnabled} onCheckedChange={setMouseControlEnabled} />
                     </div>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Keyboard className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm">Keyboard Control</span>
                       </div>
-                      <Switch checked={controlEnabled} onCheckedChange={setControlEnabled} />
+                      <Switch checked={keyboardControlEnabled} onCheckedChange={setKeyboardControlEnabled} />
                     </div>
                   </div>
                 </div>
@@ -300,7 +364,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
                         <Eye className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm">View Only Mode</span>
                       </div>
-                      <Switch checked={!controlEnabled} onCheckedChange={(v) => setControlEnabled(!v)} />
+                      <Switch checked={!mouseControlEnabled && !keyboardControlEnabled} onCheckedChange={togglePermissions} />
                     </div>
                   </div>
                 </div>

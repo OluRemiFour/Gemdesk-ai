@@ -11,6 +11,18 @@ type View = 'home' | 'create' | 'join' | 'history' | 'settings' | 'ai';
 
 function HomeScreen() {
   const [currentView, setCurrentView] = useState<View>('home');
+  const [autoStartRecording, setAutoStartRecording] = useState(false);
+
+  useEffect(() => {
+    if (window.electron?.onGlobalHotkey) {
+      const cleanup = window.electron.onGlobalHotkey(() => {
+        console.log('[HomeScreen] Global hotkey Ctrl+G triggered');
+        setAutoStartRecording(true);
+        setCurrentView('ai');
+      });
+      return cleanup;
+    }
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -47,7 +59,15 @@ function HomeScreen() {
   }
 
   if (currentView === 'ai') {
-    return <AIWorkspace onBack={() => setCurrentView('home')} />;
+    return (
+      <AIWorkspace 
+        onBack={() => {
+          setCurrentView('home');
+          setAutoStartRecording(false);
+        }} 
+        autoStartRecording={autoStartRecording}
+      />
+    );
   }
 
   return (
@@ -65,15 +85,7 @@ function HomeScreen() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setCurrentView('ai')}
-              className="gap-2 text-primary hover:text-primary hover:bg-primary/10"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span className="text-sm font-medium">AI Analysis</span>
-            </Button>
+
             <Button
               variant="ghost"
               size="sm"
@@ -140,7 +152,13 @@ function HomeScreen() {
             </button>
 
             <button
-              onClick={() => setCurrentView('ai')}
+              onClick={() => {
+                if (window.electron?.openOverlay) {
+                  window.electron.openOverlay();
+                } else {
+                  setCurrentView('ai');
+                }
+              }}
               className="group relative bg-[#121212] border border-primary/20 hover:border-primary/40 p-8 text-left transition-all duration-200 hover:bg-primary/5"
             >
               <div className="absolute top-4 right-4 w-10 h-10 bg-primary/10 border border-primary/20 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
@@ -180,7 +198,7 @@ function HomeScreen() {
       {/* Footer */}
       <footer className="border-t border-border px-6 py-3">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <div>Version 1.0.0 • Build 2024.1</div>
+          <div>Version 1.0.0 • Build 2026.1</div>
           <div className="flex items-center gap-4">
             <span>Status: <span className="text-green-500">●</span> Connected</span>
             <span>•</span>

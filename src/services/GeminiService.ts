@@ -15,7 +15,8 @@ export class GeminiService {
 
   private rotateKey() {
     this.currentKeyIndex = (this.currentKeyIndex + 1) % this.keys.length;
-    console.log(`Rotated to API key index: ${this.currentKeyIndex}`);
+    const partialKey = this.keys[this.currentKeyIndex].substring(0, 8);
+    console.log(`[GeminiService] Rotated to API key index: ${this.currentKeyIndex} (${partialKey}...)`);
     this.client = new GoogleGenAI({ apiKey: this.keys[this.currentKeyIndex] });
   }
 

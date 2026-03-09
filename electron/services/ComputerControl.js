@@ -93,16 +93,27 @@ export class ComputerControl {
       'cmd': Key.LeftSuper, 'command': Key.LeftSuper, 'win': Key.LeftSuper, 'meta': Key.LeftSuper,
       'alt': Key.LeftAlt,
       'ctrl': Key.LeftControl, 'control': Key.LeftControl,
-      'shift': Key.LeftShift
+      'shift': Key.LeftShift,
+      // Alphanumeric keys
+      'a': Key.A, 'b': Key.B, 'c': Key.C, 'd': Key.D, 'e': Key.E, 'f': Key.F, 'g': Key.G, 'h': Key.H, 'i': Key.I, 'j': Key.J, 'k': Key.K, 'l': Key.L, 'm': Key.M, 'n': Key.N, 'o': Key.O, 'p': Key.P, 'q': Key.Q, 'r': Key.R, 's': Key.S, 't': Key.T, 'u': Key.U, 'v': Key.V, 'w': Key.W, 'x': Key.X, 'y': Key.Y, 'z': Key.Z,
+      '0': Key.Num0, '1': Key.Num1, '2': Key.Num2, '3': Key.Num3, '4': Key.Num4, '5': Key.Num5, '6': Key.Num6, '7': Key.Num7, '8': Key.Num8, '9': Key.Num9
     };
 
     try {
-      const key = keyMap[keyName.toLowerCase()];
-      if (!key) {
-        // Try single character
+      const lowerKeyName = keyName.toLowerCase();
+      let key = keyMap[lowerKeyName];
+      
+      if (key === undefined) {
+        // Try single character fallback (if not in map yet)
         if (keyName.length === 1) {
-          await keyboard.type(keyName);
-          return { success: true, message: `Typed key: ${keyName}` };
+          // If no modifiers, just type it
+          if (modifiers.length === 0) {
+            await keyboard.type(keyName);
+            return { success: true, message: `Typed key: ${keyName}` };
+          }
+          // If there are modifiers, we still don't have a mapping for this char in Nut-js enum.
+          // This case should be rare for common keys now.
+          throw new Error(`Unknown key for combination: ${keyName}`);
         }
         throw new Error(`Unknown key: ${keyName}`);
       }
@@ -111,7 +122,7 @@ export class ComputerControl {
       const activeModifiers = [];
       for (const mod of modifiers) {
         const modKey = keyMap[mod.toLowerCase()];
-        if (modKey) {
+        if (modKey !== undefined) {
           await keyboard.pressKey(modKey);
           activeModifiers.push(modKey);
         }
@@ -120,8 +131,9 @@ export class ComputerControl {
       await keyboard.pressKey(key);
       await keyboard.releaseKey(key);
 
-      // Release modifiers in reverse order
-      for (const modKey of activeModifiers.reverse()) {
+      // Release modifiers in reverse order (copy and reverse)
+      const modifiersToRelease = [...activeModifiers].reverse();
+      for (const modKey of modifiersToRelease) {
         await keyboard.releaseKey(modKey);
       }
 
@@ -147,11 +159,18 @@ export class ComputerControl {
       await keyboard.type(appName);
       
       // 4. Wait for search results
-      await new Promise(resolve => setTimeout(resolve, 800));
+      await new Promise(resolve => setTimeout(resolve, 1200));
       
       // 5. Press Enter to launch
       await keyboard.pressKey(Key.Enter);
       await keyboard.releaseKey(Key.Enter);
+
+      // [NEW] Delay for specific apps to initialize UI
+      const isWhatsApp = appName.toLowerCase().includes('whatsapp');
+      if (isWhatsApp) {
+        console.log('[ComputerControl] Waiting 7s for WhatsApp to initialize...');
+        await new Promise(resolve => setTimeout(resolve, 7000));
+      }
       
       return { success: true, message: `Attempted to launch ${appName} via Start Menu search.` };
     } catch (error) {
@@ -160,15 +179,12 @@ export class ComputerControl {
     }
   }
 
-  async launchApp(appName, url = null) {
-    if (!appName) {
-      console.error('[ComputerControl] launchApp called with undefined or null appName');
-      return { success: false, error: 'Application name is required' };
-    }
+  async launchApp(appName, url = null, options = {}) {
+    if (!appName) return { success: false, error: 'App name is required' };
     
     // Check if it's a URL first
     if (appName.startsWith('http://') || appName.startsWith('https://')) {
-        return await this.openUrl(appName);
+        return await this.openUrl(appName, options);
     }
 
     // If appName contains a space and the second part looks like a URL, split it
@@ -187,22 +203,24 @@ export class ComputerControl {
         finalArgs.push(url);
     }
 
-    // Special handling for WhatsApp which might be a protocol
-    if (finalApp.toLowerCase() === 'whatsapp' && finalArgs.length > 0) {
-        const target = finalArgs[0];
-        if (/^\+?[0-9\s\-]+$/.test(target)) {
-            return await this.openUrl(`whatsapp://send?phone=${target.replace(/\s+/g, '')}`);
-        }
+    // Standard app launch via launcher
+    const launchResult = await this.launcher.launchApp(finalApp, finalArgs, options);
+    
+    // Fallback logic: If programmatic launch fails, try Start Menu Search (very reliable on Windows)
+    if (!launchResult.success && os.platform() === 'win32') {
+        console.log(`[ComputerControl] Programmatic launch failed for "${finalApp}", trying Start Menu fallback...`);
+        return await this.startAndSearch(finalApp);
     }
 
-    return this.launcher.launchApp(finalApp, finalArgs);
+    return launchResult;
   }
 
-  async openUrl(url) {
+  async openUrl(url, options = {}) {
     try {
       const { exec } = await import('node:child_process');
       const util = await import('node:util');
       const execPromise = util.promisify(exec);
+      const background = options.background || false;
       
       // Ensure URL has protocol
       let targetUrl = url;
@@ -210,15 +228,66 @@ export class ComputerControl {
         targetUrl = 'https://' + targetUrl;
       }
 
-      console.log(`[ComputerControl] Opening URL: ${targetUrl}`);
+      console.log(`[ComputerControl] Opening URL: ${targetUrl} (background: ${background})`);
       
       // Use 'start' command on Windows to open in default browser
       // For Windows, we need to be careful with special characters in URLs
-      await execPromise(`start "" "${targetUrl}"`);
+      const cmd = background ? `start /min "" "${targetUrl}"` : `start "" "${targetUrl}"`;
+      await execPromise(cmd);
       
       return { success: true, message: `Opened URL: ${targetUrl}` };
     } catch (error) {
       console.error('Open URL error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async createDoc(filename, content) {
+    try {
+      const { exec } = await import('node:child_process');
+      const util = await import('node:util');
+      const execPromise = util.promisify(exec);
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      const os = await import('node:os');
+
+      const docPath = path.join(os.homedir(), 'Documents', filename || `doc_${Date.now()}.docx`);
+      // Escape content for PowerShell - ensure it's a string
+      const stringContent = String(content || '');
+      const escapedContent = stringContent.replace(/'/g, "''").replace(/"/g, '`"');
+      
+      console.log(`[ComputerControl] Creating Word doc: ${docPath}`);
+
+      // PowerShell Script to create a Word document via COM
+      const psScript = `
+        try {
+          $word = New-Object -ComObject Word.Application
+          $word.Visible = $true
+          $doc = $word.Documents.Add()
+          $selection = $word.Selection
+          $selection.TypeText("${escapedContent}")
+          $doc.SaveAs("${docPath}")
+          Write-Output "SUCCESS"
+        } catch {
+          Write-Error $_.Exception.Message
+        }
+      `;
+
+      try {
+        const { stdout, stderr } = await execPromise(`powershell -Command "${psScript.replace(/\n/g, ' ')}"`);
+        if (stdout.includes('SUCCESS')) {
+          return { success: true, message: `Word document created and opened: ${docPath}` };
+        }
+        throw new Error(stderr || 'PowerShell execution failed');
+      } catch (psErr) {
+        console.warn('[ComputerControl] Word COM failed, falling back to simple file:', psErr.message);
+        // Fallback: Just write a text file if Word is not installed/fails
+        await fs.promises.writeFile(docPath.replace('.docx', '.txt'), content, 'utf8');
+        await this.launcher.launchApp(`notepad "${docPath.replace('.docx', '.txt')}"`);
+        return { success: true, message: `Word not available. Created text file instead: ${docPath.replace('.docx', '.txt')}` };
+      }
+    } catch (error) {
+      console.error('Create Doc error:', error);
       return { success: false, error: error.message };
     }
   }

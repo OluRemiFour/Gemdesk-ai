@@ -1,0 +1,862 @@
+import { Button } from '@/components/ui/button';
+import { getGeminiApiKeys } from '@/lib/config';
+import { cn } from '@/lib/utils';
+import { GeminiService } from '@/services/GeminiService';
+import { WakeWordService } from '@/services/WakeWordService';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  AudioLines,
+  Loader2,
+  Menu,
+  MessageSquare,
+  Mic,
+  Move,
+  Power,
+  Send,
+  Settings,
+  Sparkles
+} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+interface OverlayBarProps {
+  onClose?: () => void;
+  onToggleMode?: (mode: string) => void;
+  onToggleChat?: (active: boolean) => void;
+}
+
+const GEMINI_API_KEYS = getGeminiApiKeys();
+const geminiService = new GeminiService(GEMINI_API_KEYS);
+
+const OVERLAY_SYSTEM_PROMPT = `You are GemDesk AI, a highly capable desktop assistant.
+You operate as an interactive overlay, seeing the user's screen and hearing their voice.
+
+CORE BEHAVIOR:
+1. **INTERACTIVE FEEDBACK**: Use status words like "Processing...", "Working on it...", "Checking...", or "Okay". **Avoid using ONLY "Done"** unless the task is completely finished.
+2. **NO NARRATION**: Do not tell the user what you are "going to do" or how you'll execute unless requested or for security.
+3. **Context Awareness**: Remember the previous turn's context.
+5. **Action Execution**: When performing an action, include a JSON block.
+6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
+   NEVER use spaces in action names (e.g. use "open-url" not "open url").
+7. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
+   \`\`\`json
+   { "action": "launch", "app": "notepad", "reasoning": "Opening notepad" }
+   \`\`\`
+   NEVER omit commas or colons.
+
+### AUDIO & CLARITY:
+1. **Unclear Audio**: If the audio is too noisy or the user's request is unintelligible, DO NOT guess. Instead, politely ask: "I'm sorry, I didn't catch that. Could you please re-record or type your request?"
+2. **Don't Spell Names**: If you are unsure of a name or word pronunciation from audio, **do not attempt to spell it out** or guess.
+3. **Suggest Typing**: If you encounter a name or feature you can't pronounce or identify perfectly, **suggest that the user types it** instead.
+4. **WhatsApp Calling**: When asked to call someone, follow this flow:
+   - Step 1: Use the whatsapp-call action with a \`callType\` field (\`"audio"\` or \`"video"\`) based on what the user asked for.
+     Example: \`\`\`json
+     { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
+     \`\`\`
+   - Step 2: Once the chat is open, a screenshot will be taken automatically. In the next turn, use vision to:
+     - Locate the **video/camera icon** in the top-right of the chat header (it shows a small dropdown arrow next to it).
+     - Click the video icon. A small sub-menu will appear below it with two options:
+       - **"Audio call"** (phone/headset icon)
+       - **"Video call"** (video camera icon)
+     - If \`callType\` is \`"audio"\`, click **"Audio call"**. If \`callType\` is \`"video"\`, click **"Video call"**.
+   - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
+5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
+6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
+
+Available actions: launch, open-url, type, keypress, list-dir, read-file, save-document, create-project, create-folder, rename-file, whatsapp-chat, whatsapp-call, create-doc, open-path.`;
+
+interface ResponseBubble {
+  text: string;
+  isError?: boolean;
+}
+
+export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: OverlayBarProps) {
+  const [isRecording, setIsRecording] = useState(false);
+  const [isVisionEnabled, setIsVisionEnabled] = useState(true);
+  const [isChatMode, setIsChatMode] = useState(false);
+  const [isListeningForWakeWord, setIsListeningForWakeWord] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [responseBubble, setResponseBubble] = useState<ResponseBubble | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [isVertical, setIsVertical] = useState(false);
+  const [showSolution, setShowSolution] = useState(false);
+  const [solutionContent, setSolutionContent] = useState('');
+  const [solutionTitle, setSolutionTitle] = useState('Solution / Code');
+  const [isInputMode, setIsInputMode] = useState(false);
+  const [inputValue, setInputValue] = useState('');
+  const [inputRequest, setInputRequest] = useState<{ label: string; description: string } | null>(null);
+  const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [pendingAction, setPendingAction] = useState<any>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+  const bubbleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMouseEnter = () => {
+    if (window.electron?.setIgnoreMouseEvents) {
+      window.electron.setIgnoreMouseEvents(false);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (window.electron?.setIgnoreMouseEvents) {
+      window.electron.setIgnoreMouseEvents(true, { forward: true });
+    }
+  };
+
+  // ── Handle Body Background Transparency ────────────────────────────────────
+  useEffect(() => {
+    // When OverlayBar mounts, make the body transparent
+    const originalBg = document.body.style.backgroundColor;
+    document.body.style.backgroundColor = 'transparent';
+    
+    // Also ensure the root element is transparent if needed
+    const root = document.getElementById('root');
+    if (root) root.style.backgroundColor = 'transparent';
+
+    return () => {
+      // Revert when unmounting (e.g. if we navigated away, though overlay usually closes window)
+      document.body.style.backgroundColor = originalBg;
+      if (root) root.style.backgroundColor = '';
+    };
+  }, []);
+
+  const onWakeWordRef = useRef<(() => void) | null>(null);
+  const wakeWordServiceRef = useRef<WakeWordService | null>(null);
+  
+  useEffect(() => {
+    onWakeWordRef.current = () => {
+      console.log('[OverlayBar] Wake word "Hi Gemdesk" detected via Ref');
+      startRecording();
+    };
+  }, [isRecording, isChatMode]);
+
+  // ── Wake Word & Services Init ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!wakeWordServiceRef.current) {
+        wakeWordServiceRef.current = new WakeWordService(() => {
+          if (onWakeWordRef.current) onWakeWordRef.current();
+        });
+    }
+
+    if (isListeningForWakeWord && !isRecording && !isChatMode) {
+      wakeWordServiceRef.current.start();
+    } else {
+      wakeWordServiceRef.current.stop();
+    }
+
+    return () => {
+      wakeWordServiceRef.current?.stop();
+    };
+  }, [isListeningForWakeWord, isRecording, isChatMode]);
+
+  // ── Show response bubble, auto-dismiss after 12s ───────────────────────────
+  const showBubble = (text: string, isError = false) => {
+    if (bubbleTimerRef.current) clearTimeout(bubbleTimerRef.current);
+    setResponseBubble({ text, isError });
+    bubbleTimerRef.current = setTimeout(() => setResponseBubble(null), 12000);
+  };
+
+  // ── TTS ────────────────────────────────────────────────────────────────────
+  const speak = useCallback((text: string) => {
+    return new Promise<void>((resolve) => {
+      if (isMuted || !text) {
+        resolve();
+        return;
+      }
+
+      // Check for long text or code blocks
+      const isTooLong = text.length > 150;
+      const containsCode = text.includes('```');
+
+      if (isTooLong || containsCode) {
+        console.log('[OverlayBar] Skipping TTS for long response or code block.');
+        resolve();
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(v => v.name.includes('Google') || v.name.includes('Premium')) || voices[0];
+      if (preferred) utterance.voice = preferred;
+      utterance.rate = 1.0;
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+      window.speechSynthesis.speak(utterance);
+    });
+  }, [isMuted]);
+
+  // ── Parse & Execute Action ─────────────────────────────────────────────────
+  const maybeExecuteAction = async (text: string) => {
+    try {
+      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+      if (!jsonMatch) return;
+
+      const json = JSON.parse(jsonMatch[1]);
+      const actionType = json.action || json.type;
+      
+      // Handle info requests
+      if (actionType === 'request-info') {
+        setInputRequest({
+          label: json.label || 'Information Needed',
+          description: json.description || 'Please provide the requested details.'
+        });
+        setIsInputMode(true);
+        setShowSolution(true);
+        return;
+      }
+
+      if (json) {
+        const type = json.action || json.type;
+        const normalizedAction = {
+          ...json,
+          type: type === 'open url' ? 'open-url' : 
+                type === 'open WhatsApp' ? 'whatsapp-chat' : type
+        };
+
+        const autoExecActions = [
+          'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 
+          'open-url', 'write-file', 'delete-file', 'save-document', 
+          'create-project', 'create-doc', 'delete-file', 'open-path'
+        ];
+
+        if (autoExecActions.includes(normalizedAction.type)) {
+          console.log(`[OverlayBar] Auto-executing action: ${normalizedAction.type}`);
+          const result = await window.electron.executeAction(normalizedAction);
+          if (result.success) {
+            showBubble(`${normalizedAction.reasoning || 'Action completed.'}`);
+            
+            // Auto-followup for multi-step flows
+            if (normalizedAction.type === 'whatsapp-call') {
+              const callType = normalizedAction.callType || 'audio';
+              const callLabel = callType === 'video' ? 'Video call' : 'Audio call';
+              setTimeout(() => {
+                showBubble("Checking for call icon...");
+                sendToGemini([{ text: `The WhatsApp contact chat is now open. Look at the top-right of the chat header. You will see a video/camera icon (it may have a small dropdown arrow next to it). Click that video icon — a small sub-menu will appear below it showing two options: "Audio call" (with a phone icon) and "Video call" (with a video icon). The user wants a ${callType} call, so click "${callLabel}" from that sub-menu.` }]);
+              }, 2000);
+            }
+          } else if (result?.error) {
+            showBubble(`Action failed: ${result.error}`, true);
+          }
+        } else {
+          setPendingAction(normalizedAction);
+          setIsInputMode(false); // Ensure input mode is off if not requesting info
+          // Potentially show a confirmation UI for non-auto-executed actions
+        }
+      }
+    } catch (e) {
+      console.error('[OverlayBar] Action parse error:', e);
+      showBubble('Failed to parse AI action.', true);
+    }
+  };
+
+  // ── Send to Gemini ─────────────────────────────────────────────────────────
+  const sendToGemini = async (parts: any[]) => {
+    setIsLoading(true);
+    try {
+      // 1. Prepare current history + new user input
+      const currentHistory = [...chatHistory];
+      const userMessage = { role: 'user', parts };
+
+      // 2. Attach screenshot if vision is enabled (only to the LATEST part)
+      if (isVisionEnabled && window.electron?.captureScreenshot) {
+        const screenshot = await window.electron.captureScreenshot();
+        if (screenshot) {
+          parts.push({
+            inlineData: {
+              data: screenshot.split(',')[1],
+              mimeType: 'image/png',
+            },
+          });
+        }
+      }
+
+      // 3. Prepare the payload for Gemini
+      const contents = [...currentHistory, userMessage];
+
+      const result = await geminiService.generateContent({
+        model: 'gemini-2.5-flash',
+        config: {
+          systemInstruction: {
+            parts: [{ text: OVERLAY_SYSTEM_PROMPT }],
+          },
+        },
+        contents,
+      });
+
+      const responseText =
+        result.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
+
+      // 4. Update Chat History (keep last 12 items for context window management)
+      const assistantMessage = { role: 'model', parts: [{ text: responseText }] };
+      const updatedHistory = [...contents, assistantMessage].slice(-12);
+      setChatHistory(updatedHistory);
+
+      // Extract dynamic title if present
+      const titleMatch = responseText.match(/TITLE:\s*(.*)/);
+      if (titleMatch) {
+        setSolutionTitle(titleMatch[1].trim());
+      } else {
+        setSolutionTitle('Solution / Code');
+      }
+
+      // Strip JSON blocks and TITLE from the display text
+      const cleanText = responseText
+        .replace(/TITLE:.*\n?/g, '')
+        .replace(/TRANSCRIPTION:.*\n?/g, '')
+        .replace(/```json[\s\S]*?```/gi, '')
+        .trim();
+
+      // Detect code blocks for Solution Modal (ignore JSON)
+      const codeMatches = responseText.match(/```(?!(?:json|JSON))[\s\S]*?```/g);
+      const isLargeResponse = responseText.length > 250 || codeMatches;
+
+      if (isLargeResponse) {
+        // Always show cleanText in the modal; if code blocks exist, append them
+        if (codeMatches) {
+          setSolutionContent(cleanText + '\n\n' + codeMatches.join('\n\n'));
+        } else {
+          setSolutionContent(cleanText);
+        }
+        
+        setShowSolution(true);
+        setIsInputMode(false);
+        showBubble("Here is the detailed solution in the panel.");
+      } else {
+        showBubble(cleanText || 'Action queued.');
+      }
+      
+      // Speak then check for clarification
+      await speak(cleanText);
+      
+      // Automatic recording if it's a clarification (contains ?)
+      if (cleanText.includes('?') && !isChatMode) {
+        console.log('[OverlayBar] Clarification detected, auto-starting recording...');
+        startRecording();
+      }
+
+      await maybeExecuteAction(responseText);
+    } catch (err: any) {
+      console.error('[OverlayBar] Gemini error:', err);
+      const errorMsg = err?.message?.includes('429')
+        ? 'API quota exceeded. Try again shortly.'
+        : 'Error: ' + (err?.message || 'Unknown error');
+      showBubble(errorMsg, true);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ── Recording ──────────────────────────────────────────────────────────────
+  const startRecording = async () => {
+    if (isRecording) return;
+    try {
+      console.log('[Voice] Requesting microphone access...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+        ? 'audio/webm;codecs=opus' 
+        : 'audio/webm';
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      console.log('[Voice] Recording started.');
+      setIsRecording(true);
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+          console.log(`[Voice] Received data chunk: ${event.data.size} bytes`);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        console.log('[Voice] Recording stopped. Finalizing blob...');
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+
+        if (blob.size < 500) {
+          console.warn('[Voice] Recording too small, ignoring.', blob.size);
+          setIsRecording(false);
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          console.log('[Voice] Sending audio to Gemini...');
+          const base64 = (reader.result as string).split(',')[1];
+          await sendToGemini([
+            { inlineData: { data: base64, mimeType: 'audio/webm' } },
+          ]);
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      mediaRecorder.start(1000); // Collect data every 1s
+    } catch (err) {
+      console.error('[Voice] Error starting recording:', err);
+      showBubble('Microphone access denied.', true);
+      setIsRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  };
+
+  // ── Chat send ──────────────────────────────────────────────────────────────
+  const handleChatSend = async () => {
+    const text = chatInput.trim();
+    if (!text || isLoading) return;
+    setChatInput('');
+    await sendToGemini([{ text }]);
+  };
+
+  const toggleOrientation = () => {
+    const next = !isVertical;
+    setIsVertical(next);
+    // Request window resize from electron if needed
+    if (window.electron?.resizeOverlay) {
+      window.electron.resizeOverlay(next ? 120 : 820, next ? 650 : 180);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    showBubble('Copied to clipboard!');
+  };
+
+  const handleInputSubmit = async () => {
+    if (!inputValue.trim()) return;
+    const info = inputValue;
+    setInputValue('');
+    setShowSolution(false);
+    setIsInputMode(false);
+    setInputRequest(null);
+    await sendToGemini([{ text: `User provided info: ${info}` }]);
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    <>
+      <div className="fixed inset-0 pointer-events-none flex flex-col items-center justify-end pb-8">
+      {/* Main Bar Container */}
+      <motion.div
+        layout
+        drag
+        dragMomentum={false}
+        initial={{ y: 100, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 300, damping: 30 }}
+        className="flex flex-col items-center gap-3 pointer-events-auto relative"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        {/* Wake Word indicator - Now relative to the bar */}
+        <div className="absolute bottom-full mb-8 left-1/2 -translate-x-1/2 pointer-events-none w-max">
+          <AnimatePresence>
+            {isListeningForWakeWord && !isRecording && !isChatMode && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8, y: 10 }}
+                className="px-4 py-1.5 bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 rounded-full flex items-center gap-2"
+              >
+                <AudioLines className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                <span className="text-[10px] uppercase font-bold tracking-widest text-indigo-400">
+                  Say "Hi Gemdesk"
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* AI Response Bubble - Now relative to the bar */}
+        <div className="absolute bottom-full mb-16 left-1/2 -translate-x-1/2 pointer-events-none flex justify-center w-[90vw] max-w-[600px] px-4">
+          <AnimatePresence>
+            {responseBubble && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className={cn(
+                  "px-6 py-4 rounded-[2rem] backdrop-blur-2xl border text-sm text-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] pointer-events-auto w-full",
+                  responseBubble.isError
+                    ? "bg-red-500/20 border-red-500/30"
+                    : "bg-black/80 border-white/10"
+                )}
+                onClick={() => setResponseBubble(null)}
+              >
+                {responseBubble.text}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+        <div className={cn(
+          "flex items-center gap-2 bg-black/50 border border-white/10 p-2 rounded-full shadow-2xl transition-all duration-300",
+          isVertical && "flex-col py-3 px-1.5 h-auto min-h-[400px] max-h-[85vh] rounded-[2.5rem] justify-between"
+        )}>
+        {/* Expandable Chat Input */}
+        <AnimatePresence mode="wait">
+          {isChatMode && (
+            <motion.div
+              initial={{ width: 0, height: 0, opacity: 0 }}
+              animate={{ 
+                width: isVertical ? '100%' : 320, 
+                height: isVertical ? 'auto' : 'auto',
+                opacity: 1 
+              }}
+              exit={{ width: 0, height: 0, opacity: 0 }}
+              className="overflow-hidden flex items-center px-2"
+              style={{ WebkitAppRegion: 'no-drag' } as any}
+            >
+              <input
+                ref={chatInputRef}
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Ask Gemini..."
+                className="w-full bg-white/5 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500/50 placeholder:text-white/30"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleChatSend();
+                }}
+                autoFocus
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Primary Action Button */}
+        <motion.div layout whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+          <Button
+            onClick={isChatMode ? handleChatSend : toggleRecording}
+            disabled={isLoading}
+            className={cn(
+              "rounded-full w-12 h-12 shadow-lg transition-all duration-300",
+              isLoading
+                ? "bg-indigo-500/50 cursor-wait"
+                : isRecording
+                ? "bg-red-500 hover:bg-red-600 animate-pulse"
+                : "bg-indigo-600 hover:bg-indigo-700"
+            )}
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            {isLoading ? (
+              <Loader2 className="w-5 h-5 text-white animate-spin" />
+            ) : isChatMode ? (
+              <Send className="w-5 h-5 text-white" />
+            ) : (
+              <Mic className="w-5 h-5 text-white" />
+            )}
+          </Button>
+        </motion.div>
+
+        <div className={cn("flex items-center gap-1.5", isVertical && "flex-col pb-1")}>
+          {/* Toggle Chat / Voice Mode */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              const next = !isChatMode;
+              setIsChatMode(next);
+              onToggleChat?.(next);
+              if (next) setTimeout(() => chatInputRef.current?.focus(), 300);
+            }}
+            className={cn(
+              "rounded-full w-9 h-9 text-white hover:bg-white/10 p-0",
+              isChatMode && "bg-indigo-500/20 text-indigo-400"
+            )}
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            {isChatMode ? <Mic className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleOrientation}
+            title={isVertical ? "Horizontal View" : "Vertical View"}
+            className="rounded-full w-9 h-9 text-white hover:bg-white/10 p-0"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            <Menu className={cn("w-4 h-4 transition-transform", isVertical && "rotate-90")} />
+          </Button>
+
+          {/* Draggable Handle */}
+          <div
+            className="group cursor-move flex items-center justify-center w-9 h-9 bg-indigo-500/20 hover:bg-indigo-500/40 rounded-full transition-colors"
+          >
+            <Move className="w-4 h-4 text-white/50" />
+          </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (window.electron?.switchToDesktop) {
+                window.electron.switchToDesktop();
+              } else {
+                onToggleMode?.('desktop');
+              }
+            }}
+            title="Desktop Mode"
+            className="rounded-full w-9 h-9 text-white hover:bg-white/10 p-0"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            <Sparkles className="w-4 h-4 text-indigo-300" />
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+            className="rounded-full w-9 h-9 text-white hover:bg-white/10 p-0"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            <Settings className="w-4 h-4" />
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (window.electron?.closeOverlay) {
+                window.electron.closeOverlay();
+              } else {
+                onClose?.();
+              }
+            }}
+            title="Close"
+            className="rounded-full w-9 h-9 bg-red-500/10 hover:bg-red-500/30 text-red-500 transition-all p-0"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            <Power className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+    </div>
+      {/* ── Settings Modal - Positioned in the right corner ────────────────── */}
+      <AnimatePresence>
+        {showSettings && (
+          <div 
+            className="fixed inset-0 z-[100] pointer-events-none"
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+          >
+            {/* Panel */}
+            <motion.div
+              initial={{ x: 400, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 400, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute right-8 bottom-24 z-10 w-full max-w-sm bg-[#111]/95 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-[0_30px_100px_rgba(0,0,0,0.8)] overflow-hidden pointer-events-auto mb-4"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-5 border-b border-white/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                    <Settings className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <h3 className="font-semibold text-base text-white">Overlay Settings</h3>
+                </div>
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/5 text-white/40 hover:text-white transition-all text-xl"
+                >✕</button>
+              </div>
+
+              {/* Settings Body */}
+              <div className="p-6 flex flex-col gap-5 max-h-[70vh] overflow-y-auto custom-scrollbar">
+
+                {/* Wake Word */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white">Wake Word Detection</p>
+                    <p className="text-xs text-white/40 mt-0.5">Listen for "Hi Gemdesk" to activate</p>
+                  </div>
+                  <button
+                    onClick={() => setIsListeningForWakeWord(!isListeningForWakeWord)}
+                    className={`relative w-11 h-6 rounded-full transition-colors flex items-center ${
+                      isListeningForWakeWord ? 'bg-indigo-500' : 'bg-white/10'
+                    }`}
+                  >
+                    <span className={`absolute w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      isListeningForWakeWord ? 'translate-x-5' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* Vision Default */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white">Vision (Screen Context)</p>
+                    <p className="text-xs text-white/40 mt-0.5">Send screenshot with each request</p>
+                  </div>
+                  <button
+                    onClick={() => setIsVisionEnabled(!isVisionEnabled)}
+                    className={`relative w-11 h-6 rounded-full transition-colors flex items-center ${
+                      isVisionEnabled ? 'bg-indigo-500' : 'bg-white/10'
+                    }`}
+                  >
+                    <span className={`absolute w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      isVisionEnabled ? 'translate-x-5' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* TTS Mute */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white">AI Voice (TTS)</p>
+                    <p className="text-xs text-white/40 mt-0.5">Speak AI responses aloud</p>
+                  </div>
+                  <button
+                    onClick={() => { setIsMuted(!isMuted); if (!isMuted) window.speechSynthesis.cancel(); }}
+                    className={`relative w-11 h-6 rounded-full transition-colors flex items-center ${
+                      !isMuted ? 'bg-indigo-500' : 'bg-white/10'
+                    }`}
+                  >
+                    <span className={`absolute w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                      !isMuted ? 'translate-x-5' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+
+                <hr className="border-white/5" />
+
+                {/* Model info */}
+                <div className="flex items-center justify-between text-xs">
+                  {/* <span className="text-white/40">AI Model</span>
+                  <span className="text-indigo-400 font-mono">gemini-2.5-flash</span> */}
+                </div>
+
+                {/* Hotkey info */}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-white/40">Global Hotkey</span>
+                  <span className="text-white/60 font-mono">Ctrl + G</span>
+                </div>
+
+                <hr className="border-white/5" />
+
+                {/* Quick actions */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => { window.electron?.switchToDesktop?.(); setShowSettings(false); }}
+                    className="flex items-center gap-2 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs text-white/70 transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                    Switch to Desktop
+                  </button>
+                  <button
+                    onClick={() => { window.electron?.closeOverlay?.(); setShowSettings(false); }}
+                    className="flex items-center gap-2 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 rounded-lg text-xs text-red-400 transition-colors"
+                  >
+                    <Power className="w-4 h-4" />
+                    Close Overlay
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Solution & Input Modal ─────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showSolution && (
+          <div 
+            className="fixed inset-0 z-[100] pointer-events-none"
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+          >
+            <motion.div
+              drag
+              dragMomentum={false}
+              initial={{ x: -400, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: -400, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="absolute left-8 bottom-24 z-10 w-full max-w-xl bg-[#111]/95 backdrop-blur-3xl border border-white/10 rounded-[2rem] shadow-[0_30px_100px_rgba(0,0,0,0.8)] overflow-hidden pointer-events-auto mb-4"
+              style={{ resize: 'both', minWidth: '320px', minHeight: '270px' }}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-5 border-b border-white/5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center">
+                    {isInputMode ? <MessageSquare className="w-4 h-4 text-indigo-400" /> : <Sparkles className="w-4 h-4 text-indigo-400" />}
+                  </div>
+                  <h3 className="font-semibold text-base text-white">
+                    {isInputMode ? (inputRequest?.label || 'Information Needed') : solutionTitle}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setShowSolution(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/5 text-white/40 hover:text-white transition-all text-xl"
+                >✕</button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 flex flex-col gap-4">
+                {isInputMode ? (
+                  <>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-white">{inputRequest?.label}</p>
+                      <p className="text-xs text-white/40">{inputRequest?.description}</p>
+                    </div>
+                    <input
+                      type="text"
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      placeholder="Type here..."
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500/50"
+                      onKeyDown={(e) => e.key === 'Enter' && handleInputSubmit()}
+                      autoFocus
+                    />
+                    <Button 
+                      onClick={handleInputSubmit}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 rounded-xl"
+                    >
+                      Submit
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="bg-black/40 rounded-xl p-4 max-h-[40vh] overflow-y-auto custom-scrollbar">
+                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-3 [&>ol]:mb-3 [&>ul]:mb-3 [&>h1]:mb-2 [&>h2]:mb-2 [&>h3]:mb-2 whitespace-pre-line">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {solutionContent}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                    <Button 
+                      onClick={() => copyToClipboard(solutionContent)}
+                      className="w-full bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-xl gap-2"
+                    >
+                      Copy Content
+                    </Button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
