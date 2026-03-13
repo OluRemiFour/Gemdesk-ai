@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
-import { getGeminiApiKeys } from '@/lib/config';
+import { getCerebrasApiKeys, getGeminiApiKeys } from '@/lib/config';
 import { cn } from '@/lib/utils';
-import { GeminiService } from '@/services/GeminiService';
+import { AIRouter } from '@/services/AIRouter';
 import { WakeWordService } from '@/services/WakeWordService';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -19,6 +19,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { CONFIG } from '../config';
 
 interface OverlayBarProps {
   onClose?: () => void;
@@ -27,29 +28,37 @@ interface OverlayBarProps {
 }
 
 const GEMINI_API_KEYS = getGeminiApiKeys();
-const geminiService = new GeminiService(GEMINI_API_KEYS);
+const CEREBRAS_API_KEYS = getCerebrasApiKeys();
+const aiRouter = new AIRouter(GEMINI_API_KEYS, CEREBRAS_API_KEYS);
 
 const OVERLAY_SYSTEM_PROMPT = `You are GemDesk AI, a highly capable desktop assistant.
 You operate as an interactive overlay, seeing the user's screen and hearing their voice.
 
 CORE BEHAVIOR:
-1. **INTERACTIVE FEEDBACK**: Use status words like "Processing...", "Working on it...", "Checking...", or "Okay". **Avoid using ONLY "Done"** unless the task is completely finished.
+1. **Interactive Presence**: Provide a helpful, natural response to the user's request.
 2. **NO NARRATION**: Do not tell the user what you are "going to do" or how you'll execute unless requested or for security.
 3. **Context Awareness**: Remember the previous turn's context.
-5. **Action Execution**: When performing an action, include a JSON block.
-6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
+4. **Action Execution**: When performing an action, include a JSON block.
+5. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
    NEVER use spaces in action names (e.g. use "open-url" not "open url").
+   **CRITICAL**: For "whatsapp-chat" and "whatsapp-call", the "contact" field is MANDATORY.
+6. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`.
 7. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
    \`\`\`json
    { "action": "launch", "app": "notepad", "reasoning": "Opening notepad" }
    \`\`\`
    NEVER omit commas or colons.
+   Example for WhatsApp Message:
+   \`\`\`json
+   { "action": "whatsapp-chat", "contact": "John", "message": "Hello!", "reasoning": "Messaging John" }
+   \`\`\`
 
 ### AUDIO & CLARITY:
-1. **Unclear Audio**: If the audio is too noisy or the user's request is unintelligible, DO NOT guess. Instead, politely ask: "I'm sorry, I didn't catch that. Could you please re-record or type your request?"
+0. **Transcription**: If audio is provided, you MUST begin your response with \`TRANSCRIPTION: [What you heard]\`.
+1. **Natural Interaction**: Respond directly to what the user said. If the request is unclear, politely ask for clarification.
 2. **Don't Spell Names**: If you are unsure of a name or word pronunciation from audio, **do not attempt to spell it out** or guess.
 3. **Suggest Typing**: If you encounter a name or feature you can't pronounce or identify perfectly, **suggest that the user types it** instead.
-4. **WhatsApp Calling**: When asked to call someone, follow this flow:
+4. **WhatsApp Calling**: When asked to call someone, the "contact" field is MANDATORY. Follow this flow:
    - Step 1: Use the whatsapp-call action with a \`callType\` field (\`"audio"\` or \`"video"\`) based on what the user asked for.
      Example: \`\`\`json
      { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
@@ -64,7 +73,7 @@ CORE BEHAVIOR:
 5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
 
-Available actions: launch, open-url, type, keypress, list-dir, read-file, save-document, create-project, create-folder, rename-file, whatsapp-chat, whatsapp-call, create-doc, open-path.`;
+Available actions: launch, open-url, type, keypress, click, list-dir, read-file, save-document, create-project, create-folder, rename-file, whatsapp-chat, whatsapp-call, create-doc, open-path.`;
 
 interface ResponseBubble {
   text: string;
@@ -222,7 +231,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         const autoExecActions = [
           'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 
           'open-url', 'write-file', 'delete-file', 'save-document', 
-          'create-project', 'create-doc', 'delete-file', 'open-path'
+          'create-project', 'create-doc', 'delete-file', 'open-path', 'click'
         ];
 
         if (autoExecActions.includes(normalizedAction.type)) {
@@ -232,12 +241,16 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
             showBubble(`${normalizedAction.reasoning || 'Action completed.'}`);
             
             // Auto-followup for multi-step flows
-            if (normalizedAction.type === 'whatsapp-call') {
+            if (normalizedAction.type === 'whatsapp-call' && result.screenshot) {
               const callType = normalizedAction.callType || 'audio';
               const callLabel = callType === 'video' ? 'Video call' : 'Audio call';
+              const base64 = result.screenshot.split(',')[1];
               setTimeout(() => {
                 showBubble("Checking for call icon...");
-                sendToGemini([{ text: `The WhatsApp contact chat is now open. Look at the top-right of the chat header. You will see a video/camera icon (it may have a small dropdown arrow next to it). Click that video icon — a small sub-menu will appear below it showing two options: "Audio call" (with a phone icon) and "Video call" (with a video icon). The user wants a ${callType} call, so click "${callLabel}" from that sub-menu.` }]);
+                sendToGemini([
+                  { text: `The WhatsApp contact chat is now open. Look at the top-right of the chat header. You will see a video/camera icon (it may have a small dropdown arrow next to it). Click that video icon — a small sub-menu will appear below it showing two options: "Audio call" (with a phone icon) and "Video call" (with a video icon). The user wants a ${callType} call, so click "${callLabel}" from that sub-menu.` },
+                  { inlineData: { data: base64, mimeType: 'image/png' } }
+                ]);
               }, 2000);
             }
           } else if (result?.error) {
@@ -279,8 +292,8 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
       // 3. Prepare the payload for Gemini
       const contents = [...currentHistory, userMessage];
 
-      const result = await geminiService.generateContent({
-        model: 'gemini-2.5-flash',
+      const result = await aiRouter.generateContent({
+        model: CONFIG.GEMINI_MODEL,
         config: {
           systemInstruction: {
             parts: [{ text: OVERLAY_SYSTEM_PROMPT }],
@@ -305,11 +318,11 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         setSolutionTitle('Solution / Code');
       }
 
-      // Strip JSON blocks and TITLE from the display text
+      // Strip internal action JSON blocks and TITLE from display, but keep data JSON
       const cleanText = responseText
         .replace(/TITLE:.*\n?/g, '')
         .replace(/TRANSCRIPTION:.*\n?/g, '')
-        .replace(/```json[\s\S]*?```/gi, '')
+        .replace(/```json\s*{[\s\S]*?"action":[\s\S]*?}\s*```/gi, '') // Only strip blocks with "action":
         .trim();
 
       // Detect code blocks for Solution Modal (ignore JSON)
@@ -397,7 +410,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         reader.readAsDataURL(blob);
       };
 
-      mediaRecorder.start(1000); // Collect data every 1s
+      mediaRecorder.start(1000); // Collect data every 1s (Improved reliability)
     } catch (err) {
       console.error('[Voice] Error starting recording:', err);
       showBubble('Microphone access denied.', true);
@@ -742,8 +755,8 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
 
                 {/* Model info */}
                 <div className="flex items-center justify-between text-xs">
-                  {/* <span className="text-white/40">AI Model</span>
-                  <span className="text-indigo-400 font-mono">gemini-2.5-flash</span> */}
+                  <span className="text-white/40">AI Model</span>
+                  <span className="text-indigo-400 font-mono">{CONFIG.GEMINI_MODEL}</span>
                 </div>
 
                 {/* Hotkey info */}
@@ -838,7 +851,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
                 ) : (
                   <>
                     <div className="bg-black/40 rounded-xl p-4 max-h-[40vh] overflow-y-auto custom-scrollbar">
-                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-3 [&>ol]:mb-3 [&>ul]:mb-3 [&>h1]:mb-2 [&>h2]:mb-2 [&>h3]:mb-2 whitespace-pre-line">
+                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-1 [&>ol]:mb-3 [&>ul]:mb-3 [&>h1]:mb-2 [&>h2]:mb-2 [&>h3]:mb-2 whitespace-pre-line">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {solutionContent}
                         </ReactMarkdown>

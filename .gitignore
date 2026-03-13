@@ -41,3 +41,7 @@ core
 .github/
 
 **/tempobook/**
+
+.env
+.env.local
+.env.*

@@ -171,11 +171,22 @@ ipcMain.handle('get-sources', async () => {
 
 // IPC for high-quality screenshot capture specifically for AI
 ipcMain.handle('screenshot-capture', async () => {
-  const sources = await desktopCapturer.getSources({ 
-    types: ['screen'], 
-    thumbnailSize: { width: 1920, height: 1080 } 
-  });
-  return sources[0].thumbnail.toDataURL();
+  try {
+    const sources = await desktopCapturer.getSources({ 
+      types: ['screen'], 
+      thumbnailSize: { width: 1920, height: 1080 } 
+    });
+    
+    if (!sources || sources.length === 0) {
+      console.warn('[Main] No screen sources found for capture');
+      return null;
+    }
+    
+    return sources[0].thumbnail.toDataURL();
+  } catch (error) {
+    console.error('[Main] Screenshot capture failed:', error);
+    return null;
+  }
 });
 
 // IPC for executing shell commands safely
@@ -344,10 +355,10 @@ ipcMain.handle('execute-action', async (event, action) => {
     case 'whatsapp-chat':
     case 'whatsapp-call': {
       const isCall = action.action === 'whatsapp-call' || action.type === 'whatsapp-call';
-      let contact = action.contact || action.name || action.target;
+      let contact = action.contact || action.name || action.target || action.to || action.recipient || action.at || action.contactName;
       const message = action.message || '';
       
-      // Safety check for .replace() error
+      // Safety check
       if (!contact) return { success: false, error: 'No contact specified' };
       if (typeof contact !== 'string') contact = String(contact);
 
@@ -366,35 +377,27 @@ ipcMain.handle('execute-action', async (event, action) => {
       if (!launchResult.success) return launchResult;
 
       try {
-        // Force focus using PowerShell first (internal to AppLauncher now, but we'll trigger it here)
         console.log(`[WhatsApp] Ensuring window is focused...`);
-        
-        // If it was just opened, give it plenty of time to load UI
         const isFreshLaunch = launchResult.message?.includes('Search Menu search');
         const initialDelay = isFreshLaunch ? 10000 : 3000;
         await new Promise(r => setTimeout(r, initialDelay));
 
-        const focusResult = await computerControl.launcher.focusWindowByTitle('WhatsApp');
-        if (!focusResult.success) {
-          console.warn('[WhatsApp] Window focus attempt 1 failed:', focusResult.error);
-        }
-        
-        // Second attempt with click fallback if needed, but we prefer window handle focus
+        // Focus WhatsApp
+        await computerControl.focusWindow('WhatsApp');
         await new Promise(r => setTimeout(r, 1000));
         
-        // Ensure we are in a clean state (Escape multiple times)
-        console.log('[WhatsApp] Resetting state...');
+        // Reset state (Escape)
         await computerControl.keyPress('escape');
         await new Promise(r => setTimeout(r, 800));
         await computerControl.keyPress('escape');
         await new Promise(r => setTimeout(r, 1200));
 
-        // Focus Search bar (Ctrl+F)
-        console.log('[WhatsApp] Triggering search...');
+        // Trigger search (Ctrl+F)
+        await computerControl.focusWindow('WhatsApp');
         await computerControl.keyPress('f', ['ctrl']);
-        await new Promise(r => setTimeout(r, 2500));
+        await new Promise(r => setTimeout(r, 2000));
         
-        // Robust Clear: Ctrl+A and Backspace
+        // Clear search (Ctrl+A and Backspace)
         await computerControl.keyPress('a', ['ctrl']);
         await new Promise(r => setTimeout(r, 800));
         await computerControl.keyPress('backspace');
@@ -402,44 +405,38 @@ ipcMain.handle('execute-action', async (event, action) => {
 
         // Type contact name
         console.log(`[WhatsApp] Typing contact: ${contact}`);
+        await computerControl.focusWindow('WhatsApp');
+        await new Promise(r => setTimeout(r, 500));
         await computerControl.type(contact);
-        await new Promise(r => setTimeout(r, 7000)); // Wait for search results
+        await new Promise(r => setTimeout(r, 6000)); // Wait for search results
         
-        // Select the top contact - Enter
+        // Select the top contact
+        await computerControl.focusWindow('WhatsApp');
         await computerControl.keyPress('enter');
-        await new Promise(r => setTimeout(r, 5000)); // Wait for chat to load
-        
-        // Final Enter to ensure focus is in the message box
-        await computerControl.keyPress('enter');
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 4000)); // Wait for chat to load
 
         if (message && !isCall) {
           console.log(`[WhatsApp] Sending message...`);
+          await computerControl.focusWindow('WhatsApp');
+          await new Promise(r => setTimeout(r, 800));
           await computerControl.type(message);
-          await new Promise(r => setTimeout(r, 2500));
+          await new Promise(r => setTimeout(r, 2000));
           await computerControl.keyPress('enter');
-          await new Promise(r => setTimeout(r, 1500));
-        }
-
-        if (isCall) {
-          console.log(`[WhatsApp] Contact located. Capturing screenshot for call icon identification...`);
-          // Re-focus WhatsApp before screenshot to ensure the call bar is visible
-          await computerControl.launcher.focusWindowByTitle('WhatsApp');
           await new Promise(r => setTimeout(r, 1000));
-          
-          // Capture a fresh screenshot so the AI can see the call/video icon
-          const { nativeImage } = await import('electron');
-          const screenshot = await mainWindow.webContents.capturePage();
-          const base64Screenshot = screenshot.toJPEG(85).toString('base64');
-          
-          return { 
-            success: true, 
-            message: `Successfully opened chat with ${contact}. Screenshot captured. Now look at the top-right of the chat for the phone or video icon. Click the phone icon if visible. If only video icon is visible, click it to get the voice/video choice modal, then click "Voice call".`,
-            screenshot: `data:image/jpeg;base64,${base64Screenshot}`
-          };
         }
 
-        return { success: true, message: `Successfully located contact and processed request.` };
+        // Capture screenshot for the AI to see the state (especially for calls)
+        const sources = await desktopCapturer.getSources({ 
+          types: ['screen'], 
+          thumbnailSize: { width: 1920, height: 1080 } 
+        });
+        const screenshotData = sources.length > 0 ? sources[0].thumbnail.toDataURL() : null;
+
+        return { 
+          success: true, 
+          message: isCall ? `Opened chat with ${contact}. Screenshot captured for call initiation.` : `Opened chat with ${contact}`,
+          screenshot: screenshotData 
+        };
       } catch (error) {
         console.error('[WhatsApp] Automation error:', error);
         return { success: false, error: error.message };
@@ -534,6 +531,14 @@ ipcMain.handle('skills:delete', async (event, skillId) => {
 
 ipcMain.handle('browser:create', async (event, options) => {
   return await browserSandbox.createBrowser(options.id || 'default', options);
+});
+
+ipcMain.handle('computer:focus-window', async (event, titlePattern) => {
+  return await computerControl.focusWindow(titlePattern);
+});
+
+ipcMain.handle('computer:move-mouse', async (event, { x, y }) => {
+  return await computerControl.moveMouse(x, y);
 });
 
 ipcMain.handle('browser:navigate', async (event, { id, url }) => {

@@ -18,6 +18,10 @@ export class ComputerControl {
     return this.launcher.registerApp(name, path);
   }
 
+  async focusWindow(titlePattern) {
+    return await this.launcher.focusWindowByTitle(titlePattern);
+  }
+
   async moveMouse(x, y) {
     try {
       await mouse.setPosition(new Point(x, y));

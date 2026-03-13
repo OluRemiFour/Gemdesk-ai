@@ -1,45 +1,40 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ChatService, Chat } from '@/services/ChatService';
-import SkillLibrary from './SkillLibrary';
-import { 
-  ArrowLeft, 
-  Send, 
-  Image as ImageIcon, 
-  Mic, 
-  X, 
-  Trash2,
-  MoreVertical,
-  Plus,
-  Loader2, 
-  Sparkles, 
-  Monitor, 
-  MessageSquare,
-  ShieldCheck,
-  MousePointer2,
-  CheckCircle2,
-  XCircle,
-  Play,
-  Pause,
-  Keyboard,
+import { Chat, ChatService } from '@/services/ChatService';
+import {
+  ArrowLeft,
+  FolderPlus,
   Globe,
+  Image as ImageIcon,
+  Keyboard,
+  Loader2,
+  Menu,
+  MessageSquare,
+  Mic,
+  Monitor,
+  MousePointer2,
+  Play,
+  Plus,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
   Volume2,
   VolumeX,
-  Menu,
-  Zap,
-  FolderPlus,
-  Settings
+  X,
+  Zap
 } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import SkillLibrary from './SkillLibrary';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Checkbox } from '@/components/ui/checkbox';
-import { motion, AnimatePresence } from 'framer-motion';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { getCerebrasApiKeys, getGeminiApiKeys } from '@/lib/config';
+import { AIRouter } from '@/services/AIRouter';
+import { AnimatePresence, motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import VoiceVisualizer from './VoiceVisualizer';
-import { getGeminiApiKeys } from '@/lib/config';
-import { GeminiService } from '@/services/GeminiService';
+import { CONFIG } from '../config';
 
 interface AIWorkspaceProps {
   onBack: () => void;
@@ -81,7 +76,8 @@ interface Action {
 }
 
 const GEMINI_API_KEYS = getGeminiApiKeys();
-const geminiService = new GeminiService(GEMINI_API_KEYS);
+const CEREBRAS_API_KEYS = getCerebrasApiKeys();
+const aiRouter = new AIRouter(GEMINI_API_KEYS, CEREBRAS_API_KEYS);
 
 const VoiceMessagePlayer = ({ audioUrl }: { audioUrl: string }) => {
   return (
@@ -101,15 +97,17 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
 3. **Execution Only**: Do not explain how you'll execute a task unless it's a security-sensitive operation or requires high-level permission.
 4. **Background Operations**: When opening apps, folders, or URLs, use "background": true unless the user wants to interact immediately.
 5. **Windows Paths**: Always use double-backslashes in JSON (e.g., "C:\\\\Users\\\\ADMIN\\\\Desktop").
-6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
+6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "click", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
    NEVER use spaces in action names (e.g. use "open-url" not "open url").
-7. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
+7. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`.
+8. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
    \`\`\`json
    { "action": "open-url", "url": "https://google.com", "reasoning": "Opening Google as requested" }
    \`\`\`
    NEVER omit commas or colons.
 
 ### AUDIO & CLARITY:
+0. **Transcription**: If audio is provided, you MUST begin your response with \`TRANSCRIPTION: [What you heard]\`.
 1. **Unclear Audio**: If the audio is too noisy or the user's request is unintelligible, DO NOT guess. Instead, politely ask: "I'm sorry, I didn't catch that. Could you please re-record or type your request?"
 2. **Don't Spell Names**: If you are unsure of a name or word pronunciation from audio, **do not attempt to spell it out** or guess.
 3. **Suggest Typing**: If you encounter a name or feature you can't pronounce or identify perfectly, **suggest that the user types it** instead.
@@ -125,8 +123,10 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
        - **"Video call"** (video camera icon)
      - If \`callType\` is \`"audio"\`, click **"Audio call"**. If \`callType\` is \`"video"\`, click **"Video call"**.
    - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
-9. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
-8. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
+5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
+6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
+   - If a file is on the Desktop, use the "Desktop" shortcut prefix (e.g., "Desktop\\\\myfile.pdf") or full absolute path.
+   - For PDFs, spreadsheets, or text files, "open-path" will open them in their default application.
 `;
 
 export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceProps) {
@@ -369,10 +369,15 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
     if (overrideParts) {
       setIsLoading(true);
       try {
-        const result = await geminiService.generateContent({
-          model: "gemini-2.5-flash",
+        const history = messages.slice(-10).map(msg => ({
+          role: msg.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: msg.content }]
+        }));
+
+        const result = await aiRouter.generateContent({
+          model: CONFIG.GEMINI_MODEL,
           config: { systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] } },
-          contents: [{ role: "user", parts: overrideParts }]
+          contents: [...history, { role: "user", parts: overrideParts }]
         });
         const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
         const cleanContent = text.replace(/```json[\s\S]*?```/g, '').trim();
@@ -481,12 +486,17 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
         parts.push({ inlineData: { data: attachedImage.split(',')[1], mimeType: "image/png" } });
       }
 
-      const result = await geminiService.generateContent({
-        model: "gemini-2.5-flash",
+      const history = messages.slice(-10).map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }]
+      }));
+
+      const result = await aiRouter.generateContent({
+        model: CONFIG.GEMINI_MODEL,
         config: {
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }
         },
-        contents: [{ role: "user", parts }]
+        contents: [...history, { role: "user", parts }]
       });
 
       const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response.";
@@ -496,10 +506,11 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
       const languageMatch = text.match(/LANGUAGE:\s*([a-zA-Z-]+)/);
       const language = languageMatch ? languageMatch[1].trim() : undefined;
 
+      // Strip internal action JSON blocks and TITLE from display, but keep data JSON
       const cleanContent = text
+        .replace(/TITLE:.*\n?/g, '')
         .replace(/TRANSCRIPTION:.*\n?/g, '')
-        .replace(/LANGUAGE:.*\n?/g, '')
-        .replace(/```json[\s\S]*?```/g, '')
+        .replace(/```json\s*{[\s\S]*?"action":[\s\S]*?}\s*```/gi, '') // Only strip blocks with "action":
         .trim();
 
       // Use transcription as user message label if it exists (shows what AI heard)
@@ -546,7 +557,7 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
       const autoExecActions = [
         'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 
         'open-url', 'write-file', 'delete-file', 'save-document', 
-        'create-project', 'create-doc', 'open-path'
+        'create-project', 'create-doc', 'open-path', 'rename-file', 'move-file', 'click'
       ];
       if (action && autoExecActions.includes(action.type)) {
         setTimeout(() => executeAction(action), 500);
@@ -622,8 +633,16 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
                     }]);
                     const base64 = result.screenshot.split(',')[1];
                     const visionParts: any[] = [
-                        { text: `This is a screenshot of WhatsApp after opening a chat with ${actionToRun.contact}. Look at the top-right of the chat header. You will see a video/camera icon (it may have a small dropdown arrow next to it). Click that video icon — a small sub-menu will appear below it showing two options: "Audio call" (with a phone/headset icon) and "Video call" (with a video camera icon). The user wants a ${callType} call, so click "${callLabel}" from that sub-menu.` },
-                        { inlineData: { data: base64, mimeType: 'image/jpeg' } }
+                        { text: `This is a screenshot of WhatsApp after opening a chat with ${actionToRun.contact}. 
+I need you to find and click the specific icons to start a ${callType} call.
+
+1. Locate the video camera icon in the top-right header area.
+2. Click the video icon. A dropdown menu will appear.
+3. In that menu, click the option labeled "${callLabel}".
+
+If you see these buttons already, output a click action for them. 
+Respond ONLY with the JSON action block for the first step.` },
+                        { inlineData: { data: base64, mimeType: 'image/png' } }
                     ];
                     await handleSendMessage(undefined, undefined, visionParts);
                 }, 2000);

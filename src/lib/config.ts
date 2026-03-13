@@ -27,3 +27,29 @@ export function getGeminiApiKeys(): string[] {
   // console.log(`[Config] Discovered ${keys.length} Gemini API keys`);
   return keys;
 }
+
+/**
+ * Discovers all Cerebras API keys defined in the environment.
+ * Looks for VITE_CEREBRAS_API_KEY and VITE_CEREBRAS_API_KEY* (e.g. VITE_CEREBRAS_API_KEY1, etc.)
+ */
+export function getCerebrasApiKeys(): string[] {
+  const keys: string[] = [];
+
+  const primaryKey = import.meta.env.VITE_CEREBRAS_API_KEY;
+  if (primaryKey && typeof primaryKey === 'string') {
+    const splitKeys = primaryKey.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0 && k !== 'csk-your-key-here');
+    keys.push(...splitKeys);
+  }
+
+  for (let i = 1; i <= 10; i++) {
+    const envKey = `VITE_CEREBRAS_API_KEY${i}`;
+    const key = import.meta.env[envKey];
+    if (key && typeof key === 'string' && key.trim().length > 0 && key.trim() !== 'csk-your-key-here') {
+      if (!keys.includes(key.trim())) {
+        keys.push(key.trim());
+      }
+    }
+  }
+
+  return keys;
+}

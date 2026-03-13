@@ -278,9 +278,9 @@ function SettingsPanel({ onBack }: SettingsPanelProps) {
                     A lightweight, developer-first remote desktop tool built for speed, security, and clarity.
                   </p>
                   <div className="flex gap-3 mt-4">
-                    <Button variant="outline" size="sm" onClick={() => window.open('http://localhost:3000/#documentation', '_blank')}>Documentation</Button>
+                    <Button variant="outline" size="sm" onClick={() => window.open('https://gemdesk-sigma.vercel.app/#documentation', '_blank')}>Documentation</Button>
                     <Button variant="outline" size="sm" onClick={() => window.open('#', '_blank')}>GitHub</Button>
-                    <Button variant="outline" size="sm" onClick={() => window.open('http://localhost:3000/#report-issue', '_blank')}>Report Issue</Button>
+                    <Button variant="outline" size="sm" onClick={() => window.open('https://gemdesk-sigma.vercel.app/#report-issue', '_blank')}>Report Issue</Button>
                   </div>
                 </div>
               </div>
