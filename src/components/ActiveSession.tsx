@@ -29,7 +29,14 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   const [localAudioStream, setLocalAudioStream] = useState<MediaStream | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
+
+  useEffect(() => {
+    if (videoRef.current && remoteStream) {
+      videoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
 
   useEffect(() => {
     if (!socket) return;
@@ -37,7 +44,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     // WebRTC Peer setup
     const peer = new SimplePeer({
       initiator: !isHost, // Viewer initiates
-      trickle: false,
+      trickle: true,      // Allow trickle ICE for faster connection (removed trickle: false)
       stream: isHost ? (stream || undefined) : undefined,
     });
 
@@ -45,11 +52,6 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
 
     peer.on('signal', (data) => {
       socket.emit('signal', {
-        to: isHost ? undefined : undefined, // This needs to be handled by the server relaying to the other party
-        // Actually the server handles 'signal' event by ID, but we need to know the 'to' ID.
-        // I'll simplify the signal relaying logic in the server or components.
-        // Let's assume the server knows who the other party is based on the sessionId.
-        // I'll adjust the signal event to include sessionId.
         sessionId,
         signal: data
       });
@@ -60,9 +62,29 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     });
 
     peer.on('stream', (st) => {
-      setRemoteStream(st);
-      if (videoRef.current) {
-        videoRef.current.srcObject = st;
+      // If the incoming stream has video tracks, set it to video ref
+      if (st.getVideoTracks().length > 0) {
+        setRemoteStream(st);
+        if (videoRef.current) {
+          videoRef.current.srcObject = st;
+        }
+      }
+      
+      // If the incoming stream has audio tracks, set it to audio ref
+      if (st.getAudioTracks().length > 0) {
+        if (audioRef.current && (!isHost || isHost)) {
+          // Both host and viewer need to hear each other if multiple streams exchanged
+          audioRef.current.srcObject = st;
+          audioRef.current.play().catch(console.error);
+        }
+      }
+    });
+
+    // Handle dynamically added tracks (like when mic is toggled later)
+    peer.on('track', (track, st) => {
+      if (track.kind === 'audio' && audioRef.current) {
+         audioRef.current.srcObject = st;
+         audioRef.current.play().catch(console.error);
       }
     });
 
@@ -78,11 +100,18 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       setRemoteMicEnabled(enabled);
     });
 
+    socket.on('session-ended', () => {
+      onEnd();
+    });
+
+    socket.on('viewer-disconnected', () => {
+      // Keep session open but notify host
+      if (isHost) onEnd();
+    });
+
     // Remote Control Handling
     if (isHost) {
       socket.on('control-command', ({ command }) => {
-        // Handle control permission check based on command type (optional enhancement)
-        // For now, we trust the viewer's UI or handle it globally
         window.electron.sendInput(command.type, command.data);
       });
     }
@@ -97,16 +126,14 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     return () => {
       clearInterval(interval);
       peer.destroy();
+      socket.off('session-ended');
+      socket.off('viewer-disconnected');
+      socket.off('signal');
+      socket.off('permissions-updated');
+      socket.off('voice-status-updated');
+      if (isHost) socket.off('control-command');
     };
-  }, [isHost, socket, sessionId, stream]);
-
-  // Robust stream attachment
-  useEffect(() => {
-    if (remoteStream && videoRef.current) {
-      console.log('[ActiveSession] Attaching remote stream to video element');
-      videoRef.current.srcObject = remoteStream;
-    }
-  }, [remoteStream]);
+  }, [isHost, socket, sessionId, stream, onEnd]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isHost || !mouseControlEnabled || !socket) return;
@@ -121,22 +148,32 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
 
   const handleClick = (e: React.MouseEvent) => {
     if (isHost || !mouseControlEnabled || !socket) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
     socket.emit('control-command', {
       sessionId,
-      command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right' } }
+      command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right', x, y } }
     });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (isHost || !keyboardControlEnabled || !socket) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+
     socket.emit('control-command', {
       sessionId,
-      command: { type: 'keydown', data: { key: e.key, code: e.code } }
+      command: { type: 'keydown', data: { key: e.key, code: e.code, modifiers: [e.ctrlKey ? 'ctrl' : null, e.shiftKey ? 'shift' : null, e.altKey ? 'alt' : null, e.metaKey ? 'meta' : null].filter(Boolean) } }
     });
   };
 
   const handleKeyUp = (e: React.KeyboardEvent) => {
     if (isHost || !keyboardControlEnabled || !socket) return;
+    e.preventDefault();
+    e.stopPropagation();
+    
     socket.emit('control-command', {
       sessionId,
       command: { type: 'keyup', data: { key: e.key, code: e.code } }
@@ -181,88 +218,105 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   };
 
   return (
-    <div className="w-screen h-screen bg-black flex flex-col">
-      {/* Top Bar */}
-      <div className="bg-background/95 backdrop-blur border-b border-border px-4 py-2 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="text-sm font-medium">
-              {isHost ? 'Sharing Your Desktop' : 'Connected to Remote Desktop'}
-            </span>
-            {!isHost && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${(mouseControlEnabled || keyboardControlEnabled) ? 'bg-primary/20 text-primary border border-primary/30' : 'bg-muted text-muted-foreground'}`}>
-                {(mouseControlEnabled || keyboardControlEnabled) ? 'Write (Control)' : 'Read (View-Only)'}
+    <div className={`w-screen h-screen bg-black flex flex-col ${isFullscreen ? 'absolute inset-0 z-50' : ''}`}>
+      {/* Hidden audio element for remote mic */}
+      <audio ref={audioRef} autoPlay playsInline muted={false} />
+
+      {/* Top Bar - Hidden in full screen */}
+      {!isFullscreen && (
+        <div className="bg-background/95 backdrop-blur border-b border-border px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <span className="text-sm font-medium">
+                {isHost ? 'Sharing Your Desktop' : 'Connected to Remote Desktop'}
               </span>
-            )}
-          </div>
-          <div className="text-xs text-muted-foreground border-l border-border pl-4">
-            Session ID: <span className="font-mono">{sessionId}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Stats */}
-          <div className="flex items-center gap-4 text-xs text-muted-foreground mr-4">
-            <div className="flex items-center gap-1.5">
-              <Activity className="w-3 h-3" />
-              <span>{fps} FPS</span>
+              {!isHost && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${(mouseControlEnabled || keyboardControlEnabled) ? 'bg-primary/20 text-primary border border-primary/30' : 'bg-muted text-muted-foreground'}`}>
+                  {(mouseControlEnabled || keyboardControlEnabled) ? 'Write (Control)' : 'Read (View-Only)'}
+                </span>
+              )}
             </div>
-            <div className="border-l border-border pl-4">{latency}ms</div>
-            <div className="border-l border-border pl-4">{bandwidth.toFixed(1)} MB/s</div>
+            <div className="text-xs text-muted-foreground border-l border-border pl-4">
+              Session ID: <span className="font-mono">{sessionId}</span>
+            </div>
           </div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={toggleMic}
-            className={`gap-2 ${micEnabled ? 'text-primary' : 'text-muted-foreground'}`}
-          >
-            {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-            {micEnabled ? 'Mic On' : 'Mic Off'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4 text-xs text-muted-foreground mr-4">
+              <div className="flex items-center gap-1.5">
+                <Activity className="w-3 h-3" />
+                <span>{fps} FPS</span>
+              </div>
+              <div className="border-l border-border pl-4">{latency}ms</div>
+              <div className="border-l border-border pl-4">{bandwidth.toFixed(1)} MB/s</div>
+            </div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowSettings(!showSettings)}
-            className="gap-2"
-          >
-            <Settings className="w-4 h-4" />
-          </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleMic}
+              className={`gap-2 ${micEnabled ? 'text-primary' : 'text-muted-foreground'}`}
+            >
+              {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+              {micEnabled ? 'Mic On' : 'Mic Off'}
+            </Button>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsFullscreen(!isFullscreen)}
-          >
-            {isFullscreen ? (
-              <Minimize2 className="w-4 h-4" />
-            ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSettings(!showSettings)}
+              className="gap-2"
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsFullscreen(true)}
+            >
               <Maximize2 className="w-4 h-4" />
-            )}
-          </Button>
+            </Button>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleEndSession}
-            className="text-destructive hover:text-destructive gap-2"
-          >
-            <X className="w-4 h-4" />
-            End
-          </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleEndSession}
+              className="text-destructive hover:text-destructive gap-2"
+            >
+              <X className="w-4 h-4" />
+              End
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex relative">
         {/* Remote Desktop View */}
-        <div className="flex-1 flex items-center justify-center bg-black">
+        <div className="flex-1 flex items-center justify-center bg-black relative">
+          
+          {/* Float close fullscreen button */}
+          {isFullscreen && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="absolute top-4 right-4 z-50 opacity-50 hover:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsFullscreen(false);
+              }}
+            >
+              <Minimize2 className="w-4 h-4 mr-2" />
+              Exit Fullscreen
+            </Button>
+          )}
+
           <div 
             className="w-full h-full bg-black flex items-center justify-center relative overflow-hidden outline-none"
             onMouseMove={handleMouseMove}
-            onClick={handleClick}
+            onMouseDown={handleClick}
             onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
             tabIndex={0}
@@ -293,15 +347,14 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
           </div>
         </div>
 
-        {/* Settings Sidebar */}
-        {showSettings && (
+        {/* Settings Sidebar - Hidden in full screen */}
+        {showSettings && !isFullscreen && (
           <div className="w-80 bg-background border-l border-border flex flex-col animate-in slide-in-from-right duration-200">
             <div className="border-b border-border px-4 py-3">
               <h2 className="font-semibold text-sm">Session Settings</h2>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
-              {/* Quality Settings */}
               <div>
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 block">
                   Stream Quality
@@ -328,7 +381,6 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
                 </div>
               </div>
 
-              {/* Control Settings */}
               {!isHost && (
                 <div className="pt-4 border-t border-border">
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 block">
@@ -370,7 +422,6 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
                 </div>
               )}
 
-              {/* Connection Info */}
               <div className="pt-4 border-t border-border">
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 block">
                   Connection Info
@@ -399,18 +450,20 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
         )}
       </div>
 
-      {/* Bottom Status Bar */}
-      <div className="bg-background/95 backdrop-blur border-t border-border px-4 py-2 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-4 text-muted-foreground">
-          <span>Duration: 00:04:32</span>
-          <span>•</span>
-          <span>Data Transferred: 156.8 MB</span>
+      {/* Bottom Status Bar - Hidden in full screen */}
+      {!isFullscreen && (
+        <div className="bg-background/95 backdrop-blur border-t border-border px-4 py-2 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-4 text-muted-foreground">
+            <span>Duration: 00:04:32</span>
+            <span>•</span>
+            <span>Data Transferred: 156.8 MB</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+            <span className="text-muted-foreground">Connection Stable</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span className="text-muted-foreground">Connection Stable</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

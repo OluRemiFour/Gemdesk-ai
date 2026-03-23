@@ -1,10 +1,10 @@
 # GemDesk Frontend
 
-GemDesk is an AI-powered desktop assistant built with Electron, React, and Vite. It allows you to "share your screen with AI" to perform complex tasks using Gemini.
+GemDesk is an AI-powered desktop assistant built with Electron, React, and Vite. It allows you to "share your screen with AI" to perform complex tasks using Gemdesk.
 
 ## Features
 
-- **AI Workspace**: Chat with Gemini to perform actions on your computer.
+- **AI Workspace**: Chat with AI to perform actions on your computer.
 - **Screen Sharing**: High-quality screenshot capture and WebRTC-based sharing.
 - **Persistent History**: Connected to a MongoDB backend for saving your conversations.
 - **Voice Commands**: Integrated speech-to-text and text-to-speech capabilities.

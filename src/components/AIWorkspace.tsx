@@ -116,14 +116,11 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
      Example: \`\`\`json
      { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
      \`\`\`
-   - Step 2: Once the chat is open, a screenshot is captured. In the next vision turn:
-     - Find the **video/camera icon** in the top-right of the chat header (it has a small dropdown arrow next to it).
-     - Click the video icon — a small sub-menu appears below it with two options:
-       - **"Audio call"** (phone/headset icon)
-       - **"Video call"** (video camera icon)
-     - If \`callType\` is \`"audio"\`, click **"Audio call"**. If \`callType\` is \`"video"\`, click **"Video call"**.
+   - Step 2: Once the chat is open, a screenshot is captured. In the next vision turn find the **video/camera icon** in the top-right of the chat header (it has a small dropdown arrow).
+     Click it and YOU MUST add \`"needsFollowUp": true\` to your JSON.
+   - Step 3: Wait for the next screenshot showing the sub-menu. If \`callType\` is \`"audio"\`, click **"Audio call"** (phone icon). If \`callType\` is \`"video"\`, click **"Video call"** (video camera).*.
    - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
-5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
+5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead. Use minimal vertical spacing (avoid blank lines between list items or paragraphs).
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
    - If a file is on the Desktop, use the "Desktop" shortcut prefix (e.g., "Desktop\\\\myfile.pdf") or full absolute path.
    - For PDFs, spreadsheets, or text files, "open-path" will open them in their default application.
@@ -610,14 +607,14 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
             if (actionToRun.type === 'create-folder') {
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(), role: 'assistant',
-                    content: `✅ Folder created: \`${actionToRun.path}\``,
+                    content: `Processing...`,
                     timestamp: new Date()
                 }]);
             }
             if (actionToRun.type === 'whatsapp-chat') {
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(), role: 'assistant',
-                    content: `✅ Navigated to WhatsApp chat: **${actionToRun.contact}**`,
+                    content: `Processing...`,
                     timestamp: new Date()
                 }]);
             }
@@ -628,7 +625,7 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
                 setTimeout(async () => {
                     setMessages(prev => [...prev, {
                         id: Date.now().toString(), role: 'assistant',
-                        content: `✅ Opened WhatsApp chat with **${actionToRun.contact}**. Now identifying the call icon...`,
+                        content: `Processing...`,
                         timestamp: new Date()
                     }]);
                     const base64 = result.screenshot.split(',')[1];
@@ -637,19 +634,38 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
 I need you to find and click the specific icons to start a ${callType} call.
 
 1. Locate the video camera icon in the top-right header area.
-2. Click the video icon. A dropdown menu will appear.
-3. In that menu, click the option labeled "${callLabel}".
+2. Click the video icon. YOU MUST include "needsFollowUp": true in your JSON so I can send the next screenshot.
+3. A dropdown menu will appear. In that menu in the next step, click the option labeled "${callLabel}".
 
-If you see these buttons already, output a click action for them. 
+4. Always include "app": "WhatsApp" in your JSON.
 Respond ONLY with the JSON action block for the first step.` },
                         { inlineData: { data: base64, mimeType: 'image/png' } }
                     ];
                     await handleSendMessage(undefined, undefined, visionParts);
                 }, 2000);
+            } else if ((actionToRun as any).needsFollowUp || (actionToRun as any).originalJson?.needsFollowUp) {
+                setTimeout(async () => {
+                    setMessages(prev => [...prev, {
+                        id: Date.now().toString(), role: 'assistant',
+                        content: `Taking follow-up screenshot...`,
+                        timestamp: new Date()
+                    }]);
+                    if (window.electron?.captureScreenshot) {
+                        const screenshot = await window.electron.captureScreenshot();
+                        if (screenshot) {
+                            const base64 = screenshot.split(',')[1];
+                            const visionParts: any[] = [
+                                { text: `Action executed. Here is the updated screen. Please perform the next step.` },
+                                { inlineData: { data: base64, mimeType: 'image/png' } }
+                            ];
+                            await handleSendMessage(undefined, undefined, visionParts);
+                        }
+                    }
+                }, 1500);
             } else if (actionToRun.type === 'whatsapp-call') {
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(), role: 'assistant',
-                    content: `✅ Opened WhatsApp chat with **${actionToRun.contact}**. Enable screen sharing so I can find the call icon.`,
+                    content: `Processing...`,
                     timestamp: new Date()
                 }]);
             }
@@ -858,25 +874,25 @@ Respond ONLY with the JSON action block for the first step.` },
                         remarkPlugins={[remarkGfm]}
                         components={{
                           p({children, ...props}: any) {
-                            return <p className="mb-2 last:mb-0 leading-relaxed" {...props}>{children}</p>;
+                            return <p className="mb-1 last:mb-0 leading-snug" {...props}>{children}</p>;
                           },
                           h1({children, ...props}: any) {
-                            return <h1 className="text-base font-semibold mb-2 mt-3 text-white" {...props}>{children}</h1>;
+                            return <h1 className="text-base font-semibold mb-1 mt-2 text-white" {...props}>{children}</h1>;
                           },
                           h2({children, ...props}: any) {
-                            return <h2 className="text-sm font-semibold mb-1.5 mt-2.5 text-white/90" {...props}>{children}</h2>;
+                            return <h2 className="text-sm font-semibold mb-1 mt-1.5 text-white/90" {...props}>{children}</h2>;
                           },
                           h3({children, ...props}: any) {
-                            return <h3 className="text-xs font-semibold mb-1 mt-2 text-white/80" {...props}>{children}</h3>;
+                            return <h3 className="text-xs font-semibold mb-1 mt-1 text-white/80" {...props}>{children}</h3>;
                           },
                           ul({children, ...props}: any) {
-                            return <ul className="list-disc pl-4 mb-2 space-y-0.5" {...props}>{children}</ul>;
+                            return <ul className="list-disc pl-4 mb-1 space-y-0" {...props}>{children}</ul>;
                           },
                           ol({children, ...props}: any) {
-                            return <ol className="list-decimal pl-4 mb-2 space-y-0.5" {...props}>{children}</ol>;
+                            return <ol className="list-decimal pl-4 mb-1 space-y-0" {...props}>{children}</ol>;
                           },
                           li({children, ...props}: any) {
-                            return <li className="leading-relaxed" {...props}>{children}</li>;
+                            return <li className="leading-snug" {...props}>{children}</li>;
                           },
                           strong({children, ...props}: any) {
                             return <strong className="font-semibold text-white" {...props}>{children}</strong>;

@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, CheckCheck, Copy, Loader2, QrCode, UserCheck } from 'lucide-react';
+import { ArrowLeft, CheckCheck, Copy, Loader2, QrCode, UserCheck, Eye, MousePointer } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import ActiveSession from './ActiveSession';
@@ -30,7 +30,9 @@ function CreateSession({ onBack }: CreateSessionProps) {
     const id = Math.random().toString(36).substring(2, 10).toUpperCase();
     setSessionId(id);
 
-    newSocket.emit('create-session', id);
+    newSocket.on('connect', () => {
+      newSocket.emit('create-session', id);
+    });
 
     newSocket.on('connection-request', ({ viewerId }) => {
       setConnectionRequest({
@@ -50,7 +52,7 @@ function CreateSession({ onBack }: CreateSessionProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleAcceptConnection = async () => {
+  const handleAcceptConnection = async (permission: 'read' | 'write') => {
     if (!socket || !connectionRequest) return;
 
     try {
@@ -76,6 +78,8 @@ function CreateSession({ onBack }: CreateSessionProps) {
         viewerId: connectionRequest.requesterId, 
         approved: true 
       });
+      // Important to set permissions on accept
+      socket.emit('toggle-permissions', { sessionId, permissions: permission });
       
       setConnectionRequest(null);
       setWaiting(false);
@@ -90,10 +94,22 @@ function CreateSession({ onBack }: CreateSessionProps) {
     setWaiting(true);
   };
 
+  const cleanupStream = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+  };
+
+  const handleBack = () => {
+    cleanupStream();
+    onBack();
+  };
+
   if (sessionActive) {
     return (
       <ActiveSession 
-        onEnd={onBack} 
+        onEnd={handleBack} 
         isHost={true} 
         sessionId={sessionId} 
         socket={socket} 
@@ -107,7 +123,7 @@ function CreateSession({ onBack }: CreateSessionProps) {
       {/* Header */}
       <header className="border-b border-border px-6 py-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
+          <Button variant="ghost" size="sm" onClick={handleBack} className="gap-2">
             <ArrowLeft className="w-4 h-4" />
             Back
           </Button>
@@ -189,12 +205,16 @@ function CreateSession({ onBack }: CreateSessionProps) {
                   <p className="text-sm text-muted-foreground mb-4">
                     <span className="font-medium text-foreground">{connectionRequest.requesterName}</span> wants to connect to your computer
                   </p>
-                  <div className="flex gap-3">
-                    <Button onClick={handleAcceptConnection} className="gap-2">
-                      <UserCheck className="w-4 h-4" />
-                      Accept
+                  <div className="flex flex-col sm:flex-row gap-3 mt-4">
+                    <Button onClick={() => handleAcceptConnection('read')} variant="outline" className="gap-2 border-primary text-primary hover:bg-primary/10">
+                      <Eye className="w-4 h-4" />
+                      Accept (View Only)
                     </Button>
-                    <Button variant="outline" onClick={handleDenyConnection}>
+                    <Button onClick={() => handleAcceptConnection('write')} className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
+                      <MousePointer className="w-4 h-4" />
+                      Accept (Full Control)
+                    </Button>
+                    <Button variant="ghost" onClick={handleDenyConnection} className="text-muted-foreground hover:text-destructive">
                       Deny
                     </Button>
                   </div>

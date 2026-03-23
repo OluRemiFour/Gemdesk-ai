@@ -5,7 +5,7 @@ import CreateSession from './CreateSession';
 import JoinSession from './JoinSession';
 import SessionHistory from './SessionHistory';
 import SettingsPanel from './SettingsPanel';
-import AIWorkspace from '@/components/AIWorkspace';
+// import AIWorkspace from '@/components/AIWorkspace';
 
 type View = 'home' | 'create' | 'join' | 'history' | 'settings' | 'ai';
 
@@ -16,9 +16,10 @@ function HomeScreen() {
   useEffect(() => {
     if (window.electron?.onGlobalHotkey) {
       const cleanup = window.electron.onGlobalHotkey(() => {
-        console.log('[HomeScreen] Global hotkey Ctrl+G triggered');
-        setAutoStartRecording(true);
-        setCurrentView('ai');
+        console.log('[HomeScreen] Global hotkey Ctrl+G triggered - Opening Overlay');
+        if (window.electron?.openOverlay) {
+          window.electron.openOverlay();
+        }
       });
       return cleanup;
     }
@@ -34,7 +35,9 @@ function HomeScreen() {
         setCurrentView('join');
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
         e.preventDefault();
-        setCurrentView('ai');
+        if (window.electron?.openOverlay) {
+          window.electron.openOverlay();
+        }
       }
     };
 
@@ -58,6 +61,7 @@ function HomeScreen() {
     return <SettingsPanel onBack={() => setCurrentView('home')} />;
   }
 
+  /*
   if (currentView === 'ai') {
     return (
       <AIWorkspace 
@@ -69,6 +73,7 @@ function HomeScreen() {
       />
     );
   }
+  */
 
   return (
     <div className="w-screen h-screen bg-background flex flex-col">
@@ -155,8 +160,6 @@ function HomeScreen() {
               onClick={() => {
                 if (window.electron?.openOverlay) {
                   window.electron.openOverlay();
-                } else {
-                  setCurrentView('ai');
                 }
               }}
               className="group relative bg-[#121212] border border-primary/20 hover:border-primary/40 p-8 text-left transition-all duration-200 hover:bg-primary/5"

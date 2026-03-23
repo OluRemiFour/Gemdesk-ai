@@ -52,19 +52,47 @@ function JoinSession({ onBack }: JoinSessionProps) {
 
     setError(null);
     setIsConnecting(true);
-    socket.emit('join-session', sessionId);
+    socket.emit('join-session', sessionId.trim());
   };
 
   const handleCancel = () => {
     setIsConnecting(false);
     setWaitingApproval(false);
     setError(null);
+    setSessionId('');
+    if (socket) {
+      socket.disconnect();
+      const newSocket = io(SOCKET_URL);
+      setSocket(newSocket);
+      
+      newSocket.on('request-approved', ({ hostId }) => {
+        setWaitingApproval(false);
+        setSessionActive(true);
+      });
+
+      newSocket.on('request-denied', () => {
+        setWaitingApproval(false);
+        setError('Connection was denied by the host');
+        setIsConnecting(false);
+      });
+
+      newSocket.on('error', (msg) => {
+        setError(msg);
+        setIsConnecting(false);
+      });
+    }
+  };
+
+  const handleBack = () => {
+    setSessionActive(false);
+    handleCancel();
+    onBack();
   };
 
   if (sessionActive) {
     return (
       <ActiveSession 
-        onEnd={onBack} 
+        onEnd={handleBack} 
         isHost={false} 
         sessionId={sessionId} 
         socket={socket} 
@@ -77,7 +105,7 @@ function JoinSession({ onBack }: JoinSessionProps) {
       {/* Header */}
       <header className="border-b border-border px-6 py-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
+          <Button variant="ghost" size="sm" onClick={() => { handleCancel(); onBack(); }} className="gap-2">
             <ArrowLeft className="w-4 h-4" />
             Back
           </Button>
@@ -100,7 +128,7 @@ function JoinSession({ onBack }: JoinSessionProps) {
               <Input
                 type="text"
                 value={sessionId}
-                onChange={(e) => setSessionId(e.target.value.toUpperCase())}
+                onChange={(e) => setSessionId(e.target.value.trim().toUpperCase())}
                 placeholder="XXXXXXXX"
                 className="text-center font-mono text-2xl tracking-[0.3em] h-16 uppercase"
                 maxLength={8}
@@ -154,7 +182,7 @@ function JoinSession({ onBack }: JoinSessionProps) {
                   >
                     Connect
                   </Button>
-                  <Button variant="outline" onClick={onBack}>
+                  <Button variant="outline" onClick={() => { handleCancel(); onBack(); }}>
                     Cancel
                   </Button>
                 </>

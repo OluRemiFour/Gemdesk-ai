@@ -150,8 +150,6 @@ export class ComputerControl {
 
   async startAndSearch(appName) {
     try {
-      console.log(`[ComputerControl] Simulating Start and Search for: ${appName}`);
-      
       // 1. Press Windows Key
       await keyboard.pressKey(Key.LeftSuper);
       await keyboard.releaseKey(Key.LeftSuper);
@@ -172,7 +170,6 @@ export class ComputerControl {
       // [NEW] Delay for specific apps to initialize UI
       const isWhatsApp = appName.toLowerCase().includes('whatsapp');
       if (isWhatsApp) {
-        console.log('[ComputerControl] Waiting 7s for WhatsApp to initialize...');
         await new Promise(resolve => setTimeout(resolve, 7000));
       }
       
@@ -231,8 +228,6 @@ export class ComputerControl {
       if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://') && !targetUrl.includes('://')) {
         targetUrl = 'https://' + targetUrl;
       }
-
-      console.log(`[ComputerControl] Opening URL: ${targetUrl} (background: ${background})`);
       
       // Use 'start' command on Windows to open in default browser
       // For Windows, we need to be careful with special characters in URLs
@@ -257,10 +252,6 @@ export class ComputerControl {
 
       const docPath = path.join(os.homedir(), 'Documents', filename || `doc_${Date.now()}.docx`);
       // Escape content for PowerShell - ensure it's a string
-      const stringContent = String(content || '');
-      const escapedContent = stringContent.replace(/'/g, "''").replace(/"/g, '`"');
-      
-      console.log(`[ComputerControl] Creating Word doc: ${docPath}`);
 
       // PowerShell Script to create a Word document via COM
       const psScript = `
@@ -303,28 +294,33 @@ export class ComputerControl {
    */
   async handleRawInput(type, data) {
     try {
+      const { screen } = await import('electron');
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.bounds;
+
       switch (type) {
-        case 'mouse-move':
-          // Data is normalized {x, y} from 0-1
-          // We need to convert to screen coordinates if possible, or leave as is if nut-js handles it
-          // For now, assume data is absolute or handled by a higher layer
-          // But ActiveSession sends normalized. We might need screen size.
-          // Generic implementation for now:
+        case 'mouse-move': {
           if (data.x !== undefined && data.y !== undefined) {
-             // Basic implementation - might need refined scaling
-             await mouse.setPosition(new Point(data.x, data.y));
+             const absX = Math.round(data.x * width);
+             const absY = Math.round(data.y * height);
+             await mouse.setPosition(new Point(absX, absY));
           }
           break;
-        case 'click':
+        }
+        case 'click': {
+          if (data.x !== undefined && data.y !== undefined) {
+             const absX = Math.round(data.x * width);
+             const absY = Math.round(data.y * height);
+             await mouse.setPosition(new Point(absX, absY));
+          }
           const btn = data.button === 'right' ? Button.RIGHT : Button.LEFT;
           await mouse.click(btn);
           break;
+        }
         case 'keydown':
           await this.keyPress(data.key, data.modifiers || []);
           break;
         case 'keyup':
-          // nut-js releaseKey handles this, but our keyPress does press and release
-          // For remote control, we might need separate press/release.
           break;
       }
     } catch (error) {

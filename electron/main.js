@@ -22,8 +22,6 @@ import MongoDBService from './services/MongoDBService.js';
 import { ScreenMonitor } from './services/ScreenMonitor.js';
 import { SkillManager } from './services/SkillManager.js';
 
-// Environment variable check
-console.log('[Main] MONGODB_URI loaded:', process.env.MONGODB_URI ? 'Yes' : 'No');
 
 let mainWindow = null;
 let overlayWindow = null;
@@ -242,6 +240,11 @@ ipcMain.handle('execute-action', async (event, action) => {
     case 'doubleclick':
     case 'rightclick':
       if (typeof target === 'object' && target !== null && 'x' in target && 'y' in target) {
+        if (app) {
+          console.log(`[Main] Focusing ${app} before click`);
+          await computerControl.focusWindow(app);
+          await new Promise(r => setTimeout(r, 500));
+        }
         return await computerControl.click(target.x, target.y, type);
       }
       return { success: false, error: 'Invalid target for click' };
@@ -412,6 +415,8 @@ ipcMain.handle('execute-action', async (event, action) => {
         
         // Select the top contact
         await computerControl.focusWindow('WhatsApp');
+        await computerControl.keyPress('down');
+        await new Promise(r => setTimeout(r, 600));
         await computerControl.keyPress('enter');
         await new Promise(r => setTimeout(r, 4000)); // Wait for chat to load
 
@@ -423,6 +428,33 @@ ipcMain.handle('execute-action', async (event, action) => {
           await new Promise(r => setTimeout(r, 2000));
           await computerControl.keyPress('enter');
           await new Promise(r => setTimeout(r, 1000));
+        } else if (isCall) {
+          console.log(`[WhatsApp] Initiating call (tab trick)...`);
+          await computerControl.focusWindow('WhatsApp');
+          await new Promise(r => setTimeout(r, 800));
+          
+          // Initiate 10 tabs to reach the call button
+          for (let i = 0; i < 10; i++) {
+            await computerControl.keyPress('tab');
+            await new Promise(r => setTimeout(r, 150));
+          }
+          
+          await new Promise(r => setTimeout(r, 500));
+          // Press enter to open the voice/video call dialog box
+          await computerControl.keyPress('enter');
+          await new Promise(r => setTimeout(r, 1500));
+          
+          // If a specific call type was requested, we can try to navigate the dialog
+          // Usually down arrow selects the second option, etc.
+          if (action.callType === 'audio') {
+             await computerControl.keyPress('down');
+             await new Promise(r => setTimeout(r, 300));
+             await computerControl.keyPress('enter');
+             await new Promise(r => setTimeout(r, 1000));
+          } else if (action.callType === 'video') {
+             await computerControl.keyPress('enter');
+             await new Promise(r => setTimeout(r, 1000));
+          }
         }
 
         // Capture screenshot for the AI to see the state (especially for calls)

@@ -42,7 +42,7 @@ CORE BEHAVIOR:
 5. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
    NEVER use spaces in action names (e.g. use "open-url" not "open url").
    **CRITICAL**: For "whatsapp-chat" and "whatsapp-call", the "contact" field is MANDATORY.
-6. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`.
+6. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`. If you need another screenshot immediately after to perform the next step (like clicking a menu item that appears), add \`"needsFollowUp": true\` to your JSON.
 7. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
    \`\`\`json
    { "action": "launch", "app": "notepad", "reasoning": "Opening notepad" }
@@ -63,14 +63,11 @@ CORE BEHAVIOR:
      Example: \`\`\`json
      { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
      \`\`\`
-   - Step 2: Once the chat is open, a screenshot will be taken automatically. In the next turn, use vision to:
-     - Locate the **video/camera icon** in the top-right of the chat header (it shows a small dropdown arrow next to it).
-     - Click the video icon. A small sub-menu will appear below it with two options:
-       - **"Audio call"** (phone/headset icon)
-       - **"Video call"** (video camera icon)
-     - If \`callType\` is \`"audio"\`, click **"Audio call"**. If \`callType\` is \`"video"\`, click **"Video call"**.
+   - Step 2: Once the chat is open, a screenshot will be taken. In the next turn, use vision to locate the **video/camera icon** in the top-right of the chat header (it has a small dropdown arrow).
+     Click it and YOU MUST add \`"needsFollowUp": true\` to your JSON.
+   - Step 3: Wait for the next screenshot showing the sub-menu. If \`callType\` is \`"audio"\`, click **"Audio call"** (phone icon). If \`callType\` is \`"video"\`, click **"Video call"** (video camera).
    - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
-5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead.
+5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead. Use minimal vertical spacing (avoid blank lines between list items).
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
 
 Available actions: launch, open-url, type, keypress, click, list-dir, read-file, save-document, create-project, create-folder, rename-file, whatsapp-chat, whatsapp-call, create-doc, open-path.`;
@@ -80,25 +77,54 @@ interface ResponseBubble {
   isError?: boolean;
 }
 
+const DEFAULT_SETTINGS = {
+  wakeWordEnabled: false,
+  visionEnabled: true,
+  ttsEnabled: true,
+  connectionQuality: 'high',
+  adaptiveQuality: true,
+  requireApproval: true,
+  showNotifications: true,
+  displayMode: 'fit',
+  showFps: true,
+  hardwareAcceleration: true,
+};
+
 export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: OverlayBarProps) {
+  const [settings, setSettings] = useState(() => {
+    const saved = localStorage.getItem('gemdesk_settings');
+    if (saved) {
+      try {
+        return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      } catch (e) {
+        return DEFAULT_SETTINGS;
+      }
+    }
+    return DEFAULT_SETTINGS;
+  });
+
+  const updateSetting = (key: string, value: any) => {
+    const newSettings = { ...settings, [key]: value };
+    setSettings(newSettings);
+    localStorage.setItem('gemdesk_settings', JSON.stringify(newSettings));
+  };
+
   const [isRecording, setIsRecording] = useState(false);
-  const [isVisionEnabled, setIsVisionEnabled] = useState(true);
   const [isChatMode, setIsChatMode] = useState(false);
-  const [isListeningForWakeWord, setIsListeningForWakeWord] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [responseBubble, setResponseBubble] = useState<ResponseBubble | null>(null);
-  const [isMuted, setIsMuted] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [isVertical, setIsVertical] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
   const [solutionContent, setSolutionContent] = useState('');
-  const [solutionTitle, setSolutionTitle] = useState('Solution / Code');
+  const [solutionTitle, setSolutionTitle] = useState('Result');
   const [isInputMode, setIsInputMode] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [inputRequest, setInputRequest] = useState<{ label: string; description: string } | null>(null);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [pendingAction, setPendingAction] = useState<any>(null);
+  const isListeningForWakeWord = settings.wakeWordEnabled;
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -152,7 +178,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         });
     }
 
-    if (isListeningForWakeWord && !isRecording && !isChatMode) {
+    if (settings.wakeWordEnabled && !isRecording && !isChatMode) {
       wakeWordServiceRef.current.start();
     } else {
       wakeWordServiceRef.current.stop();
@@ -161,7 +187,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
     return () => {
       wakeWordServiceRef.current?.stop();
     };
-  }, [isListeningForWakeWord, isRecording, isChatMode]);
+  }, [settings.wakeWordEnabled, isRecording, isChatMode]);
 
   // ── Show response bubble, auto-dismiss after 12s ───────────────────────────
   const showBubble = (text: string, isError = false) => {
@@ -173,7 +199,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
   // ── TTS ────────────────────────────────────────────────────────────────────
   const speak = useCallback((text: string) => {
     return new Promise<void>((resolve) => {
-      if (isMuted || !text) {
+      if (!settings.ttsEnabled || !text) {
         resolve();
         return;
       }
@@ -198,7 +224,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
       utterance.onerror = () => resolve();
       window.speechSynthesis.speak(utterance);
     });
-  }, [isMuted]);
+  }, [settings.ttsEnabled]);
 
   // ── Parse & Execute Action ─────────────────────────────────────────────────
   const maybeExecuteAction = async (text: string) => {
@@ -238,7 +264,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
           console.log(`[OverlayBar] Auto-executing action: ${normalizedAction.type}`);
           const result = await window.electron.executeAction(normalizedAction);
           if (result.success) {
-            showBubble(`${normalizedAction.reasoning || 'Action completed.'}`);
+            showBubble(`Processing...`);
             
             // Auto-followup for multi-step flows
             if (normalizedAction.type === 'whatsapp-call' && result.screenshot) {
@@ -246,9 +272,9 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
               const callLabel = callType === 'video' ? 'Video call' : 'Audio call';
               const base64 = result.screenshot.split(',')[1];
               setTimeout(() => {
-                showBubble("Checking for call icon...");
+                showBubble("Processing...");
                 sendToGemini([
-                  { text: `The WhatsApp contact chat is now open. Look at the top-right of the chat header. You will see a video/camera icon (it may have a small dropdown arrow next to it). Click that video icon — a small sub-menu will appear below it showing two options: "Audio call" (with a phone icon) and "Video call" (with a video icon). The user wants a ${callType} call, so click "${callLabel}" from that sub-menu.` },
+                  { text: `The WhatsApp contact chat is now open. Look at the top-right is the chat header. You'll see a video/camera icon. Click that video icon — a sub-menu will appear with "Audio call" (phone icon) and "Video call" (video icon). The user wants a ${callType} call, so click "${callLabel}" from that menu. Always include "app": "WhatsApp" in your JSON.` },
                   { inlineData: { data: base64, mimeType: 'image/png' } }
                 ]);
               }, 2000);
@@ -277,7 +303,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
       const userMessage = { role: 'user', parts };
 
       // 2. Attach screenshot if vision is enabled (only to the LATEST part)
-      if (isVisionEnabled && window.electron?.captureScreenshot) {
+      if (settings.visionEnabled && window.electron?.captureScreenshot) {
         const screenshot = await window.electron.captureScreenshot();
         if (screenshot) {
           parts.push({
@@ -325,23 +351,19 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         .replace(/```json\s*{[\s\S]*?"action":[\s\S]*?}\s*```/gi, '') // Only strip blocks with "action":
         .trim();
 
-      // Detect code blocks for Solution Modal (ignore JSON)
+      // 5. Detect code blocks for Solution Modal (ignore JSON actions)
+      const hasAction = responseText.includes('"action":') || responseText.includes('"type":');
       const codeMatches = responseText.match(/```(?!(?:json|JSON))[\s\S]*?```/g);
-      const isLargeResponse = responseText.length > 250 || codeMatches;
+      const isLargeResponse = (responseText.length > 250 || codeMatches) && !hasAction;
 
       if (isLargeResponse) {
-        // Always show cleanText in the modal; if code blocks exist, append them
-        if (codeMatches) {
-          setSolutionContent(cleanText + '\n\n' + codeMatches.join('\n\n'));
-        } else {
-          setSolutionContent(cleanText);
-        }
-        
+        // Show cleanText in the modal; if code blocks exist, append them
+        setSolutionContent(codeMatches ? cleanText + '\n\n' + codeMatches.join('\n\n') : cleanText);
         setShowSolution(true);
         setIsInputMode(false);
-        showBubble("Here is the detailed solution in the panel.");
+        showBubble("Check the detailed response in the panel.");
       } else {
-        showBubble(cleanText || 'Action queued.');
+        showBubble(cleanText || (hasAction ? 'Processing...' : 'Action queued.'));
       }
       
       // Speak then check for clarification
@@ -541,7 +563,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask Gemini..."
+                placeholder="Ask Gemdesk..."
                 className="w-full bg-white/5 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500/50 placeholder:text-white/30"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleChatSend();
@@ -704,13 +726,13 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
                     <p className="text-xs text-white/40 mt-0.5">Listen for "Hi Gemdesk" to activate</p>
                   </div>
                   <button
-                    onClick={() => setIsListeningForWakeWord(!isListeningForWakeWord)}
+                    onClick={() => updateSetting('wakeWordEnabled', !settings.wakeWordEnabled)}
                     className={`relative w-11 h-6 rounded-full transition-colors flex items-center ${
-                      isListeningForWakeWord ? 'bg-indigo-500' : 'bg-white/10'
+                      settings.wakeWordEnabled ? 'bg-indigo-500' : 'bg-white/10'
                     }`}
                   >
                     <span className={`absolute w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      isListeningForWakeWord ? 'translate-x-5' : 'translate-x-1'
+                      settings.wakeWordEnabled ? 'translate-x-5' : 'translate-x-1'
                     }`} />
                   </button>
                 </div>
@@ -722,13 +744,13 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
                     <p className="text-xs text-white/40 mt-0.5">Send screenshot with each request</p>
                   </div>
                   <button
-                    onClick={() => setIsVisionEnabled(!isVisionEnabled)}
+                    onClick={() => updateSetting('visionEnabled', !settings.visionEnabled)}
                     className={`relative w-11 h-6 rounded-full transition-colors flex items-center ${
-                      isVisionEnabled ? 'bg-indigo-500' : 'bg-white/10'
+                      settings.visionEnabled ? 'bg-indigo-500' : 'bg-white/10'
                     }`}
                   >
                     <span className={`absolute w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      isVisionEnabled ? 'translate-x-5' : 'translate-x-1'
+                      settings.visionEnabled ? 'translate-x-5' : 'translate-x-1'
                     }`} />
                   </button>
                 </div>
@@ -740,13 +762,13 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
                     <p className="text-xs text-white/40 mt-0.5">Speak AI responses aloud</p>
                   </div>
                   <button
-                    onClick={() => { setIsMuted(!isMuted); if (!isMuted) window.speechSynthesis.cancel(); }}
+                    onClick={() => { updateSetting('ttsEnabled', !settings.ttsEnabled); if (settings.ttsEnabled) window.speechSynthesis.cancel(); }}
                     className={`relative w-11 h-6 rounded-full transition-colors flex items-center ${
-                      !isMuted ? 'bg-indigo-500' : 'bg-white/10'
+                      settings.ttsEnabled ? 'bg-indigo-500' : 'bg-white/10'
                     }`}
                   >
                     <span className={`absolute w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                      !isMuted ? 'translate-x-5' : 'translate-x-1'
+                      settings.ttsEnabled ? 'translate-x-5' : 'translate-x-1'
                     }`} />
                   </button>
                 </div>
@@ -755,8 +777,9 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
 
                 {/* Model info */}
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-white/40">AI Model</span>
-                  <span className="text-indigo-400 font-mono">{CONFIG.GEMINI_MODEL}</span>
+                  {/* comment out this for now */}
+                  {/* <span className="text-white/40">AI Model</span> */}
+                  {/* <span className="text-indigo-400 font-mono">{CONFIG.GEMINI_MODEL}</span> */}
                 </div>
 
                 {/* Hotkey info */}
@@ -851,7 +874,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
                 ) : (
                   <>
                     <div className="bg-black/40 rounded-xl p-4 max-h-[40vh] overflow-y-auto custom-scrollbar">
-                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-1 [&>ol]:mb-3 [&>ul]:mb-3 [&>h1]:mb-2 [&>h2]:mb-2 [&>h3]:mb-2 whitespace-pre-line">
+                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-1 [&>ol]:mb-1.5 [&>ul]:mb-1.5 [&>h1]:mb-1 [&>h2]:mb-1 [&>h3]:mb-1 whitespace-pre-line">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {solutionContent}
                         </ReactMarkdown>
