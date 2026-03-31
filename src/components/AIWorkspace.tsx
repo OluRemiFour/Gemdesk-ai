@@ -97,7 +97,7 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
 3. **Execution Only**: Do not explain how you'll execute a task unless it's a security-sensitive operation or requires high-level permission.
 4. **Background Operations**: When opening apps, folders, or URLs, use "background": true unless the user wants to interact immediately.
 5. **Windows Paths**: Always use double-backslashes in JSON (e.g., "C:\\\\Users\\\\ADMIN\\\\Desktop").
-6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "click", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
+6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "click", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "whatsapp-initiate-call-dropdown", "create-doc", "open-path".
    NEVER use spaces in action names (e.g. use "open-url" not "open url").
 7. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`.
 8. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
@@ -116,9 +116,7 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
      Example: \`\`\`json
      { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
      \`\`\`
-   - Step 2: Once the chat is open, a screenshot is captured. In the next vision turn find the **video/camera icon** in the top-right of the chat header (it has a small dropdown arrow).
-     Click it and YOU MUST add \`"needsFollowUp": true\` to your JSON.
-   - Step 3: Wait for the next screenshot showing the sub-menu. If \`callType\` is \`"audio"\`, click **"Audio call"** (phone icon). If \`callType\` is \`"video"\`, click **"Video call"** (video camera).*.
+   - Step 2: A screenshot will be provided. VERIFY the contact was successfully found. If so, output \`{ "action": "whatsapp-initiate-call-dropdown", "callType": "..." }\`. Include "app": "WhatsApp". The system will automatically navigate the dropdown using the keyboard.
    - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
 5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead. Use minimal vertical spacing (avoid blank lines between list items or paragraphs).
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
@@ -167,7 +165,7 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
     if (autoStartRecording && !isRecording) {
       startRecording();
     }
-  }, [autoStartRecording]);
+  }, [autoStartRecording, isRecording]);
 
   useEffect(() => {
     loadChats();
@@ -224,7 +222,7 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
         try {
           const info = await window.electron.getDeviceInfo();
           setDeviceName(info.hostname || info.username || 'Developer');
-        } catch (e) {}
+        } catch (_) {}
       }
     };
     fetchDeviceInfo();
@@ -277,8 +275,8 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
         };
         return action;
       }
-    } catch (e) {
-      console.error("Failed to parse action JSON", e);
+    } catch (_) {
+      console.error("Failed to parse action JSON");
     }
     return null;
   };
@@ -552,7 +550,7 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
 
       // Auto-execute safe actions immediately
       const autoExecActions = [
-        'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 
+        'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 'whatsapp-initiate-call-dropdown', 
         'open-url', 'write-file', 'delete-file', 'save-document', 
         'create-project', 'create-doc', 'open-path', 'rename-file', 'move-file', 'click'
       ];
@@ -579,7 +577,8 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
     setActionStatus('executing');
     try {
       if (window.electron && window.electron.executeAction) {
-        const { originalJson, ...sanitizedAction } = actionToRun;
+        const { ...sanitizedAction } = actionToRun;
+        delete sanitizedAction.originalJson;
         const result = await window.electron.executeAction(sanitizedAction);
 
         if (result.success) {
@@ -619,9 +618,7 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
                 }]);
             }
             if (actionToRun.type === 'whatsapp-call' && result.screenshot) {
-                // Automatically trigger AI vision to click the correct call type icon
                 const callType = (actionToRun as any).callType || actionToRun.originalJson?.callType || 'audio';
-                const callLabel = callType === 'video' ? 'Video call' : 'Audio call';
                 setTimeout(async () => {
                     setMessages(prev => [...prev, {
                         id: Date.now().toString(), role: 'assistant',
@@ -630,19 +627,23 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
                     }]);
                     const base64 = result.screenshot.split(',')[1];
                     const visionParts: any[] = [
-                        { text: `This is a screenshot of WhatsApp after opening a chat with ${actionToRun.contact}. 
-I need you to find and click the specific icons to start a ${callType} call.
-
-1. Locate the video camera icon in the top-right header area.
-2. Click the video icon. YOU MUST include "needsFollowUp": true in your JSON so I can send the next screenshot.
-3. A dropdown menu will appear. In that menu in the next step, click the option labeled "${callLabel}".
-
-4. Always include "app": "WhatsApp" in your JSON.
-Respond ONLY with the JSON action block for the first step.` },
+                        { text: `This is a screenshot of WhatsApp after searching for ${actionToRun.contact}. 
+1. Check if the contact was successfully found and the chat is open. (Look for "No results found" or similar).
+2. If the contact was NOT found, DO NOT initiate a call. Instead, reply to the user that the contact was not found.
+3. If the contact IS found and the chat is open, output a JSON action to open the call dropdown: 
+{ "action": "whatsapp-initiate-call-dropdown", "callType": "${callType}", "app": "WhatsApp" }
+Output ONLY this JSON if the contact is found.` },
                         { inlineData: { data: base64, mimeType: 'image/png' } }
                     ];
                     await handleSendMessage(undefined, undefined, visionParts);
                 }, 2000);
+            } else if (actionToRun.type === 'whatsapp-initiate-call-dropdown') {
+                const callType = (actionToRun as any).callType || actionToRun.originalJson?.callType || 'audio';
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'assistant',
+                    content: `✅ ${callType === 'video' ? 'Video' : 'Audio'} call initiated!`,
+                    timestamp: new Date()
+                }]);
             } else if ((actionToRun as any).needsFollowUp || (actionToRun as any).originalJson?.needsFollowUp) {
                 setTimeout(async () => {
                     setMessages(prev => [...prev, {
@@ -662,7 +663,7 @@ Respond ONLY with the JSON action block for the first step.` },
                         }
                     }
                 }, 1500);
-            } else if (actionToRun.type === 'whatsapp-call') {
+            } else if (actionToRun.type === 'whatsapp-call' || actionToRun.type === 'whatsapp-initiate-call-dropdown') {
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(), role: 'assistant',
                     content: `Processing...`,
@@ -676,7 +677,7 @@ Respond ONLY with the JSON action block for the first step.` },
             setTimeout(() => {
                 setPendingAction(null);
                 setActionStatus('idle');
-                if (!actionToRun.silent && !['create-folder','whatsapp-chat','whatsapp-call','save-document','capture-browser','open-path'].includes(actionToRun.type)) {
+                if (!actionToRun.silent && !['create-folder','whatsapp-chat','whatsapp-call','whatsapp-initiate-call-dropdown','save-document','capture-browser','open-path'].includes(actionToRun.type)) {
                     setMessages(prev => [...prev, {
                         id: Date.now().toString(), role: 'assistant',
                         content: `${actionToRun.reasoning}`,

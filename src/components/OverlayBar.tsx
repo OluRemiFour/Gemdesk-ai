@@ -39,7 +39,7 @@ CORE BEHAVIOR:
 2. **NO NARRATION**: Do not tell the user what you are "going to do" or how you'll execute unless requested or for security.
 3. **Context Awareness**: Remember the previous turn's context.
 4. **Action Execution**: When performing an action, include a JSON block.
-5. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "create-doc", "open-path".
+5. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "whatsapp-initiate-call-dropdown", "create-doc", "open-path".
    NEVER use spaces in action names (e.g. use "open-url" not "open url").
    **CRITICAL**: For "whatsapp-chat" and "whatsapp-call", the "contact" field is MANDATORY.
 6. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`. If you need another screenshot immediately after to perform the next step (like clicking a menu item that appears), add \`"needsFollowUp": true\` to your JSON.
@@ -63,9 +63,8 @@ CORE BEHAVIOR:
      Example: \`\`\`json
      { "action": "whatsapp-call", "contact": "John", "callType": "audio", "reasoning": "Calling John" }
      \`\`\`
-   - Step 2: Once the chat is open, a screenshot will be taken. In the next turn, use vision to locate the **video/camera icon** in the top-right of the chat header (it has a small dropdown arrow).
-     Click it and YOU MUST add \`"needsFollowUp": true\` to your JSON.
-   - Step 3: Wait for the next screenshot showing the sub-menu. If \`callType\` is \`"audio"\`, click **"Audio call"** (phone icon). If \`callType\` is \`"video"\`, click **"Video call"** (video camera).
+   - Step 2: A screenshot will be provided. VERIFY the contact was successfully found. If so, output \`{ "action": "whatsapp-initiate-call-dropdown", "callType": "..." }\`. Include "app": "WhatsApp".
+   - Step 3: Another screenshot showing the call dropdown will be provided. Output a \`click\` action on either "Audio call" or "Video call" based on the user's request. Include "app": "WhatsApp".
    - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
 5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead. Use minimal vertical spacing (avoid blank lines between list items).
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
@@ -255,7 +254,7 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         };
 
         const autoExecActions = [
-          'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 
+          'launch', 'create-folder', 'whatsapp-chat', 'whatsapp-call', 'whatsapp-initiate-call-dropdown',
           'open-url', 'write-file', 'delete-file', 'save-document', 
           'create-project', 'create-doc', 'delete-file', 'open-path', 'click'
         ];
@@ -269,12 +268,31 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
             // Auto-followup for multi-step flows
             if (normalizedAction.type === 'whatsapp-call' && result.screenshot) {
               const callType = normalizedAction.callType || 'audio';
+              const base64 = result.screenshot.split(',')[1];
+              setTimeout(() => {
+                showBubble("Processing...");
+                sendToGemini([
+                  { text: `This is a screenshot of WhatsApp after searching for ${normalizedAction.contact}. 
+1. Check if the contact was successfully found and the chat is open. (Look for "No results found" or similar).
+2. If the contact was NOT found, DO NOT initiate a call. Instead, reply to the user that the contact was not found.
+3. If the contact IS found and the chat is open, output a JSON action to open the call dropdown: 
+{ "action": "whatsapp-initiate-call-dropdown", "callType": "${callType}", "app": "WhatsApp" }
+Output ONLY this JSON if the contact is found.` },
+                  { inlineData: { data: base64, mimeType: 'image/png' } }
+                ]);
+              }, 2000);
+            } else if (normalizedAction.type === 'whatsapp-initiate-call-dropdown' && result.screenshot) {
+              const callType = normalizedAction.callType || 'audio';
               const callLabel = callType === 'video' ? 'Video call' : 'Audio call';
               const base64 = result.screenshot.split(',')[1];
               setTimeout(() => {
                 showBubble("Processing...");
                 sendToGemini([
-                  { text: `The WhatsApp contact chat is now open. Look at the top-right is the chat header. You'll see a video/camera icon. Click that video icon — a sub-menu will appear with "Audio call" (phone icon) and "Video call" (video icon). The user wants a ${callType} call, so click "${callLabel}" from that menu. Always include "app": "WhatsApp" in your JSON.` },
+                  { text: `The WhatsApp call dropdown is now open. The user requested a ${callType} call.
+1. Look at the dropdown menu.
+2. Find the option labeled "${callLabel}".
+3. Output a "click" action with the exact X and Y coordinates of that option.
+Always include "app": "WhatsApp" in your JSON.` },
                   { inlineData: { data: base64, mimeType: 'image/png' } }
                 ]);
               }, 2000);

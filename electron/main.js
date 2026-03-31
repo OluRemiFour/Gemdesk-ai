@@ -429,32 +429,8 @@ ipcMain.handle('execute-action', async (event, action) => {
           await computerControl.keyPress('enter');
           await new Promise(r => setTimeout(r, 1000));
         } else if (isCall) {
-          console.log(`[WhatsApp] Initiating call (tab trick)...`);
-          await computerControl.focusWindow('WhatsApp');
-          await new Promise(r => setTimeout(r, 800));
-          
-          // Initiate 10 tabs to reach the call button
-          for (let i = 0; i < 10; i++) {
-            await computerControl.keyPress('tab');
-            await new Promise(r => setTimeout(r, 150));
-          }
-          
-          await new Promise(r => setTimeout(r, 500));
-          // Press enter to open the voice/video call dialog box
-          await computerControl.keyPress('enter');
-          await new Promise(r => setTimeout(r, 1500));
-          
-          // If a specific call type was requested, we can try to navigate the dialog
-          // Usually down arrow selects the second option, etc.
-          if (action.callType === 'audio') {
-             await computerControl.keyPress('down');
-             await new Promise(r => setTimeout(r, 300));
-             await computerControl.keyPress('enter');
-             await new Promise(r => setTimeout(r, 1000));
-          } else if (action.callType === 'video') {
-             await computerControl.keyPress('enter');
-             await new Promise(r => setTimeout(r, 1000));
-          }
+          console.log(`[WhatsApp] Chat opened. Ready for AI vision check.`);
+          await new Promise(r => setTimeout(r, 1000));
         }
 
         // Capture screenshot for the AI to see the state (especially for calls)
@@ -471,6 +447,50 @@ ipcMain.handle('execute-action', async (event, action) => {
         };
       } catch (error) {
         console.error('[WhatsApp] Automation error:', error);
+        return { success: false, error: error.message };
+      }
+    }
+
+    case 'whatsapp-initiate-call-dropdown': {
+      try {
+        // callType: 'audio' → Down once, 'video' → Down twice
+        const callType = action.callType || 'audio';
+        console.log(`[WhatsApp] Initiating call dropdown (tab trick) for ${callType} call...`);
+
+        await computerControl.focusWindow('WhatsApp');
+        await new Promise(r => setTimeout(r, 800));
+        
+        // Tab 10 times to reach the call button, then Enter to open the options modal
+        for (let i = 0; i < 10; i++) {
+          await computerControl.keyPress('tab');
+          await new Promise(r => setTimeout(r, 150));
+        }
+        
+        await new Promise(r => setTimeout(r, 500));
+        // Press enter to open the voice/video call dialog box (options modal)
+        await computerControl.keyPress('enter');
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Navigate to the correct call type using the Down arrow key:
+        //   Audio call → Down once (first option)
+        //   Video call → Down twice (second option)
+        const downPresses = callType === 'video' ? 2 : 1;
+        console.log(`[WhatsApp] Pressing Down ${downPresses} time(s) to select ${callType} call...`);
+        for (let i = 0; i < downPresses; i++) {
+          await computerControl.keyPress('down');
+          await new Promise(r => setTimeout(r, 400));
+        }
+
+        // Confirm the selection
+        await computerControl.keyPress('enter');
+        await new Promise(r => setTimeout(r, 1000));
+
+        return { 
+          success: true, 
+          message: `Initiated ${callType} call via keyboard navigation.`
+        };
+      } catch (error) {
+        console.error('[WhatsApp] Call dropdown error:', error);
         return { success: false, error: error.message };
       }
     }
