@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import ActiveSession from './ActiveSession';
 
+import { ChatService } from '@/services/ChatService';
+
 const SOCKET_URL = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:3001';
 
 interface CreateSessionProps {
@@ -61,6 +63,7 @@ function CreateSession({ onBack }: CreateSessionProps) {
       const sources = await window.electron.getSources();
       const source = sources[0]; // Just take the first one (screen) for now
 
+      // Improved constraints for better reliability and performance
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
@@ -68,16 +71,28 @@ function CreateSession({ onBack }: CreateSessionProps) {
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: source.id,
+            minWidth: 1280,
+            maxWidth: 1920,
+            minHeight: 720,
+            maxHeight: 1080,
+            minFrameRate: 30,
+            maxFrameRate: 60
           }
         }
       } as any);
 
       setStream(mediaStream);
+      
+      // Notify backend and create a chat record for history
       socket.emit('approve-request', { 
         sessionId, 
         viewerId: connectionRequest.requesterId, 
         approved: true 
       });
+      
+      // Save session to history
+      await ChatService.createChat(`Remote Session: ${sessionId}`);
+
       // Important to set permissions on accept
       socket.emit('toggle-permissions', { sessionId, permissions: permission });
       

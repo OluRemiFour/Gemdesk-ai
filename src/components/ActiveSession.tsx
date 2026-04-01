@@ -136,25 +136,89 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   }, [isHost, socket, sessionId, stream, onEnd]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (isHost || !mouseControlEnabled || !socket) return;
+    if (isHost || !mouseControlEnabled || !socket || !videoRef.current) return;
+    
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    socket.emit('control-command', {
-      sessionId,
-      command: { type: 'mouse-move', data: { x, y } }
-    });
+    const video = videoRef.current;
+    
+    // Get actual video dimensions
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    
+    if (!videoWidth || !videoHeight) return;
+
+    // Calculate scaling and offsets for object-contain
+    const containerWidth = rect.width;
+    const containerHeight = rect.height;
+    const containerRatio = containerWidth / containerHeight;
+    const videoRatio = videoWidth / videoHeight;
+    
+    let renderedWidth, renderedHeight, offsetX, offsetY;
+    
+    if (containerRatio > videoRatio) {
+      renderedHeight = containerHeight;
+      renderedWidth = containerHeight * videoRatio;
+      offsetX = (containerWidth - renderedWidth) / 2;
+      offsetY = 0;
+    } else {
+      renderedWidth = containerWidth;
+      renderedHeight = containerWidth / videoRatio;
+      offsetX = 0;
+      offsetY = (containerHeight - renderedHeight) / 2;
+    }
+    
+    // Calculate cursor position relative to the ACTUAL video content
+    const relativeX = (e.clientX - rect.left - offsetX) / renderedWidth;
+    const relativeY = (e.clientY - rect.top - offsetY) / renderedHeight;
+    
+    // Only emit if within bounds (0 to 1)
+    if (relativeX >= 0 && relativeX <= 1 && relativeY >= 0 && relativeY <= 1) {
+      socket.emit('control-command', {
+        sessionId,
+        command: { type: 'mouse-move', data: { x: relativeX, y: relativeY } }
+      });
+    }
   };
 
   const handleClick = (e: React.MouseEvent) => {
-    if (isHost || !mouseControlEnabled || !socket) return;
+    if (isHost || !mouseControlEnabled || !socket || !videoRef.current) return;
+    
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    socket.emit('control-command', {
-      sessionId,
-      command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right', x, y } }
-    });
+    const video = videoRef.current;
+    
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    
+    if (!videoWidth || !videoHeight) return;
+
+    const containerWidth = rect.width;
+    const containerHeight = rect.height;
+    const containerRatio = containerWidth / containerHeight;
+    const videoRatio = videoWidth / videoHeight;
+    
+    let renderedWidth, renderedHeight, offsetX, offsetY;
+    
+    if (containerRatio > videoRatio) {
+      renderedHeight = containerHeight;
+      renderedWidth = containerHeight * videoRatio;
+      offsetX = (containerWidth - renderedWidth) / 2;
+      offsetY = 0;
+    } else {
+      renderedWidth = containerWidth;
+      renderedHeight = containerWidth / videoRatio;
+      offsetX = 0;
+      offsetY = (containerHeight - renderedHeight) / 2;
+    }
+    
+    const relativeX = (e.clientX - rect.left - offsetX) / renderedWidth;
+    const relativeY = (e.clientY - rect.top - offsetY) / renderedHeight;
+    
+    if (relativeX >= 0 && relativeX <= 1 && relativeY >= 0 && relativeY <= 1) {
+      socket.emit('control-command', {
+        sessionId,
+        command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right', x: relativeX, y: relativeY } }
+      });
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

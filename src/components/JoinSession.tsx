@@ -5,6 +5,8 @@ import { Input } from '@/components/ui/input';
 import ActiveSession from './ActiveSession';
 import { io, Socket } from 'socket.io-client';
 
+import { ChatService } from '@/services/ChatService';
+
 const SOCKET_URL = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:3001';
 
 interface JoinSessionProps {
@@ -23,8 +25,12 @@ function JoinSession({ onBack }: JoinSessionProps) {
     const newSocket = io(SOCKET_URL);
     setSocket(newSocket);
 
-    newSocket.on('request-approved', ({ hostId }) => {
+    newSocket.on('request-approved', async ({ hostId }) => {
       setWaitingApproval(false);
+      
+      // Save session to history
+      await ChatService.createChat(`Remote Session: ${sessionId}`);
+      
       setSessionActive(true);
     });
 

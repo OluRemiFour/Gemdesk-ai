@@ -3,8 +3,8 @@
 import { mouse, keyboard, Point, Button, Key } from '@nut-tree-fork/nut-js';
 
 // Configure nut.js
-mouse.config.autoDelayMs = 10;
-keyboard.config.autoDelayMs = 10;
+mouse.config.autoDelayMs = 0;
+keyboard.config.autoDelayMs = 0;
 
 import { AppLauncher } from './AppLauncher.js';
 
