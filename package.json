@@ -27,6 +27,13 @@
     "directories": {
       "output": "dist-electron"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "OluRemiFour",
+        "repo": "Gemdesk-ai"
+      }
+    ],
     "files": [
       "dist/**/*",
       "electron/**/*",
