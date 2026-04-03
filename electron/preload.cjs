@@ -57,4 +57,12 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('global-hotkey-triggered', listener);
     return () => ipcRenderer.removeListener('global-hotkey-triggered', listener);
   },
+
+  // Window close confirmation
+  confirmClose: () => ipcRenderer.invoke('confirm-close'),
+  onWindowCloseRequested: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('window-close-requested', listener);
+    return () => ipcRenderer.removeListener('window-close-requested', listener);
+  },
 });

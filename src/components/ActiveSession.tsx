@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Maximize2, Minimize2, Settings, Activity, MonitorOff, MousePointer, Keyboard, Eye, Loader2, Mic, MicOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -30,7 +30,11 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
+  const lastMouseEmitRef = useRef<number>(0);
+  const pendingMouseRef = useRef<{ x: number; y: number } | null>(null);
+  const mouseRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (videoRef.current && remoteStream) {
@@ -41,11 +45,31 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   useEffect(() => {
     if (!socket) return;
 
-    // WebRTC Peer setup
+    // WebRTC Peer setup with high-quality config
     const peer = new SimplePeer({
       initiator: !isHost, // Viewer initiates
-      trickle: true,      // Allow trickle ICE for faster connection (removed trickle: false)
+      trickle: true,      // Allow trickle ICE for faster connection
       stream: isHost ? (stream || undefined) : undefined,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+        ],
+      },
+      // Request higher quality encoding
+      sdpTransform: (sdp: string) => {
+        // Boost video bitrate to 8 Mbps for crisp desktop sharing
+        let modifiedSdp = sdp.replace(
+          /a=mid:video\r\n/g,
+          'a=mid:video\r\na=b=AS:8000\r\n'
+        );
+        // Also set bitrate via TIAS (Transport Independent Application Specific) for modern browsers
+        modifiedSdp = modifiedSdp.replace(
+          /a=mid:0\r\n/g,
+          'a=mid:0\r\na=b=AS:8000\r\n'
+        );
+        return modifiedSdp;
+      },
     });
 
     peerRef.current = peer;
@@ -59,6 +83,31 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
 
     socket.on('signal', ({ signal }) => {
       peer.signal(signal);
+    });
+
+    // Once connected, boost sender bitrate via RTCRtpSender
+    peer.on('connect', () => {
+      try {
+        const pc = (peer as any)._pc as RTCPeerConnection | undefined;
+        if (pc) {
+          const senders = pc.getSenders();
+          senders.forEach((sender: RTCRtpSender) => {
+            if (sender.track?.kind === 'video') {
+              const params = sender.getParameters();
+              if (!params.encodings || params.encodings.length === 0) {
+                params.encodings = [{}];
+              }
+              params.encodings[0].maxBitrate = 8_000_000; // 8 Mbps
+              params.encodings[0].maxFramerate = 60;
+              // @ts-ignore - scaleResolutionDownBy may not be in all TS defs
+              params.encodings[0].scaleResolutionDownBy = 1.0; // No downscaling
+              sender.setParameters(params).catch(console.warn);
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('[ActiveSession] Could not set sender bitrate:', err);
+      }
     });
 
     peer.on('stream', (st) => {
@@ -135,17 +184,17 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     };
   }, [isHost, socket, sessionId, stream, onEnd]);
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isHost || !mouseControlEnabled || !socket || !videoRef.current) return;
+  const getRelativeCoords = (e: React.MouseEvent | React.WheelEvent) => {
+    if (!videoRef.current || !containerRef.current) return null;
     
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = containerRef.current.getBoundingClientRect();
     const video = videoRef.current;
     
     // Get actual video dimensions
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
     
-    if (!videoWidth || !videoHeight) return;
+    if (!videoWidth || !videoHeight) return null;
 
     // Calculate scaling and offsets for object-contain
     const containerWidth = rect.width;
@@ -168,57 +217,114 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     }
     
     // Calculate cursor position relative to the ACTUAL video content
-    const relativeX = (e.clientX - rect.left - offsetX) / renderedWidth;
-    const relativeY = (e.clientY - rect.top - offsetY) / renderedHeight;
+    const x = (e.clientX - rect.left - offsetX) / renderedWidth;
+    const y = (e.clientY - rect.top - offsetY) / renderedHeight;
     
-    // Only emit if within bounds (0 to 1)
-    if (relativeX >= 0 && relativeX <= 1 && relativeY >= 0 && relativeY <= 1) {
+    return { x, y };
+  };
+
+  // Throttled mouse move: emit at most every 8ms (~120Hz) and use
+  // requestAnimationFrame to coalesce intermediate moves, reducing
+  // socket flood while keeping movement feeling snappy.
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isHost || !mouseControlEnabled || !socket) return;
+    
+    const coords = getRelativeCoords(e);
+    if (!coords) return;
+    if (coords.x < 0 || coords.x > 1 || coords.y < 0 || coords.y > 1) return;
+
+    // Store the latest position
+    pendingMouseRef.current = coords;
+
+    const now = performance.now();
+    const elapsed = now - lastMouseEmitRef.current;
+
+    // If enough time has passed, emit immediately
+    if (elapsed >= 8) {
+      lastMouseEmitRef.current = now;
+      socket.volatile.emit('control-command', {
+        sessionId,
+        command: { type: 'mouse-move', data: coords }
+      });
+      pendingMouseRef.current = null;
+      return;
+    }
+
+    // Otherwise schedule via rAF so we coalesce intermediate moves
+    if (!mouseRafRef.current) {
+      mouseRafRef.current = requestAnimationFrame(() => {
+        mouseRafRef.current = null;
+        const pending = pendingMouseRef.current;
+        if (pending && socket) {
+          lastMouseEmitRef.current = performance.now();
+          socket.volatile.emit('control-command', {
+            sessionId,
+            command: { type: 'mouse-move', data: pending }
+          });
+          pendingMouseRef.current = null;
+        }
+      });
+    }
+  }, [isHost, mouseControlEnabled, socket, sessionId]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isHost || !mouseControlEnabled || !socket) return;
+    
+    const coords = getRelativeCoords(e);
+    if (!coords) return;
+    
+    if (coords.x >= 0 && coords.x <= 1 && coords.y >= 0 && coords.y <= 1) {
       socket.emit('control-command', {
         sessionId,
-        command: { type: 'mouse-move', data: { x: relativeX, y: relativeY } }
+        command: { 
+          type: 'mouse-down', 
+          data: { 
+            button: e.button === 2 ? 'right' : 'left', 
+            x: coords.x, 
+            y: coords.y 
+          } 
+        }
       });
     }
   };
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (isHost || !mouseControlEnabled || !socket || !videoRef.current) return;
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (isHost || !mouseControlEnabled || !socket) return;
     
-    const rect = e.currentTarget.getBoundingClientRect();
-    const video = videoRef.current;
+    const coords = getRelativeCoords(e);
+    if (!coords) return;
     
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
-    
-    if (!videoWidth || !videoHeight) return;
-
-    const containerWidth = rect.width;
-    const containerHeight = rect.height;
-    const containerRatio = containerWidth / containerHeight;
-    const videoRatio = videoWidth / videoHeight;
-    
-    let renderedWidth, renderedHeight, offsetX, offsetY;
-    
-    if (containerRatio > videoRatio) {
-      renderedHeight = containerHeight;
-      renderedWidth = containerHeight * videoRatio;
-      offsetX = (containerWidth - renderedWidth) / 2;
-      offsetY = 0;
-    } else {
-      renderedWidth = containerWidth;
-      renderedHeight = containerWidth / videoRatio;
-      offsetX = 0;
-      offsetY = (containerHeight - renderedHeight) / 2;
-    }
-    
-    const relativeX = (e.clientX - rect.left - offsetX) / renderedWidth;
-    const relativeY = (e.clientY - rect.top - offsetY) / renderedHeight;
-    
-    if (relativeX >= 0 && relativeX <= 1 && relativeY >= 0 && relativeY <= 1) {
+    if (coords.x >= 0 && coords.x <= 1 && coords.y >= 0 && coords.y <= 1) {
       socket.emit('control-command', {
         sessionId,
-        command: { type: 'click', data: { button: e.button === 0 ? 'left' : 'right', x: relativeX, y: relativeY } }
+        command: { 
+          type: 'mouse-up', 
+          data: { 
+            button: e.button === 2 ? 'right' : 'left', 
+            x: coords.x, 
+            y: coords.y 
+          } 
+        }
       });
     }
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (isHost || !mouseControlEnabled || !socket) return;
+    
+    // Prevent the GemDesk app itself from scrolling
+    e.preventDefault();
+
+    socket.emit('control-command', {
+      sessionId,
+      command: { 
+        type: 'mouse-wheel', 
+        data: { 
+          deltaX: e.deltaX, 
+          deltaY: e.deltaY 
+        } 
+      }
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -378,9 +484,13 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
           )}
 
           <div 
+            ref={containerRef}
             className="w-full h-full bg-black flex items-center justify-center relative overflow-hidden outline-none"
             onMouseMove={handleMouseMove}
-            onMouseDown={handleClick}
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onWheel={handleWheel}
+            onContextMenu={(e) => e.preventDefault()}
             onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
             tabIndex={0}

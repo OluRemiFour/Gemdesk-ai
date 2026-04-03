@@ -57,10 +57,15 @@ function createWindow() {
   win.once('ready-to-show', () => {
     win.show();
   });
+
+  // Intercept the close button — ask renderer for confirmation
+  win.on('close', (e) => {
+    if (win._forceClose) return; // bypass if explicitly confirmed
+    e.preventDefault();
+    win.webContents.send('window-close-requested');
+  });
   
   mainWindow = win;
-  
-
 
   // Initialize services with window reference
   computerControl = new ComputerControl();
@@ -114,6 +119,14 @@ function createOverlayWindow() {
 
 
 
+
+// Renderer confirmed close — actually quit
+ipcMain.handle('confirm-close', () => {
+  if (mainWindow) {
+    mainWindow._forceClose = true;
+    mainWindow.close();
+  }
+});
 
 ipcMain.handle('open-overlay', () => {
   if (mainWindow) mainWindow.hide();

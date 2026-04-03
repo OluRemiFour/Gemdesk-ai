@@ -47,6 +47,10 @@ export interface ElectronInterface {
   resizeOverlay: (width: number, height: number) => Promise<void>;
   switchToDesktop: () => Promise<void>;
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward: boolean }) => Promise<void>;
+
+  // Window Close Lifecycle
+  onWindowCloseRequested: (callback: () => void) => () => void;
+  confirmClose: () => void;
 }
 
 declare global {

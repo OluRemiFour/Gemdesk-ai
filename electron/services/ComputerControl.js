@@ -317,6 +317,34 @@ export class ComputerControl {
           await mouse.click(btn);
           break;
         }
+        case 'mouse-down': {
+          if (data.x !== undefined && data.y !== undefined) {
+             const absX = Math.round(data.x * width);
+             const absY = Math.round(data.y * height);
+             await mouse.setPosition(new Point(absX, absY));
+          }
+          const btn = data.button === 'right' ? Button.RIGHT : Button.LEFT;
+          await mouse.pressButton(btn);
+          break;
+        }
+        case 'mouse-up': {
+          if (data.x !== undefined && data.y !== undefined) {
+             const absX = Math.round(data.x * width);
+             const absY = Math.round(data.y * height);
+             await mouse.setPosition(new Point(absX, absY));
+          }
+          const btn = data.button === 'right' ? Button.RIGHT : Button.LEFT;
+          await mouse.releaseButton(btn);
+          break;
+        }
+        case 'mouse-wheel': {
+          if (data.deltaY > 0) await mouse.scrollDown(Math.max(1, Math.ceil(Math.abs(data.deltaY) / 120)));
+          else if (data.deltaY < 0) await mouse.scrollUp(Math.max(1, Math.ceil(Math.abs(data.deltaY) / 120)));
+          
+          if (data.deltaX > 0) await mouse.scrollRight(Math.max(1, Math.ceil(Math.abs(data.deltaX) / 120)));
+          else if (data.deltaX < 0) await mouse.scrollLeft(Math.max(1, Math.ceil(Math.abs(data.deltaX) / 120)));
+          break;
+        }
         case 'keydown':
           await this.keyPress(data.key, data.modifiers || []);
           break;

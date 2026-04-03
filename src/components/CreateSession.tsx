@@ -63,7 +63,7 @@ function CreateSession({ onBack }: CreateSessionProps) {
       const sources = await window.electron.getSources();
       const source = sources[0]; // Just take the first one (screen) for now
 
-      // Improved constraints for better reliability and performance
+      // High-quality constraints: capture at native resolution up to 4K, 60fps
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
@@ -71,10 +71,10 @@ function CreateSession({ onBack }: CreateSessionProps) {
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: source.id,
-            minWidth: 1280,
-            maxWidth: 1920,
-            minHeight: 720,
-            maxHeight: 1080,
+            minWidth: 1920,
+            maxWidth: 3840,
+            minHeight: 1080,
+            maxHeight: 2160,
             minFrameRate: 30,
             maxFrameRate: 60
           }
