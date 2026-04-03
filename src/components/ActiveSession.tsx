@@ -39,6 +39,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       videoRef.current.srcObject = remoteStream;
+      videoRef.current.play().catch(e => console.error("Play failed:", e));
     }
   }, [remoteStream]);
 
@@ -116,6 +117,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
         setRemoteStream(st);
         if (videoRef.current) {
           videoRef.current.srcObject = st;
+          videoRef.current.play().catch(e => console.error("Play failed:", e));
         }
       }
       
@@ -509,6 +511,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
                   ref={videoRef} 
                   autoPlay 
                   playsInline 
+                  muted
                   className="w-full h-full object-contain"
                 />
               ) : (

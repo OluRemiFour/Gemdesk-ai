@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,13 @@ function JoinSession({ onBack }: JoinSessionProps) {
   const [sessionActive, setSessionActive] = useState(false);
   const [waitingApproval, setWaitingApproval] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!sessionActive && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [sessionActive]);
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL);
@@ -132,6 +139,8 @@ function JoinSession({ onBack }: JoinSessionProps) {
                 Session ID
               </label>
               <Input
+                ref={inputRef}
+                autoFocus
                 type="text"
                 value={sessionId}
                 onChange={(e) => setSessionId(e.target.value.trim().toUpperCase())}

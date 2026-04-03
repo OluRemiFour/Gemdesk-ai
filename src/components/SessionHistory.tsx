@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Clock, Monitor, UserPlus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Clock, Monitor, UserPlus, Trash2, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ChatService, Chat } from '@/services/ChatService';
 
@@ -29,12 +29,16 @@ function SessionHistory({ onBack }: SessionHistoryProps) {
     }
   };
 
+  const [clearing, setClearing] = useState(false);
+
   const handleClearAll = async () => {
     if (confirm('Are you sure you want to clear all history? This cannot be undone.')) {
+      setClearing(true);
       for (const chat of chats) {
         await ChatService.deleteChat(chat._id);
       }
-      loadChats();
+      await loadChats();
+      setClearing(false);
     }
   };
 
@@ -56,9 +60,10 @@ function SessionHistory({ onBack }: SessionHistoryProps) {
             size="sm" 
             className="gap-2 text-destructive hover:bg-destructive/10"
             onClick={handleClearAll}
+            disabled={clearing}
           >
-            <Trash2 className="w-4 h-4" />
-            Clear All
+            {clearing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {clearing ? 'Clearing...' : 'Clear All'}
           </Button>
         </div>
       </header>
@@ -126,7 +131,7 @@ function SessionHistory({ onBack }: SessionHistoryProps) {
 
                       {/* Actions */}
                       <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => {/* Detail view logic would go here */}}>
+                        <Button variant="ghost" size="sm" onClick={() => alert(`Session Details:\n\nID: ${session._id}\nTitle: ${session.title || 'Untitled Session'}\nCreated: ${new Date(session.created_at).toLocaleString()}`)}>
                           Details
                         </Button>
                         <Button 
