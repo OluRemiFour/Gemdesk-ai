@@ -51,7 +51,16 @@ export class ActionParser {
 
       case 'open-url':
         if (!normalized.url && !normalized.target) return null;
-        normalized.url = normalized.url || normalized.target;
+        let urlValue = (normalized.url || normalized.target).trim();
+        const commonApps = ['chrome', 'google chrome', 'firefox', 'edge', 'msedge', 'microsoft edge', 'brave', 'opera', 'safari', 'whatsapp', 'vscode', 'notepad'];
+        
+        if (commonApps.includes(urlValue.toLowerCase())) {
+          console.log(`[ActionParser] Auto-correcting "open-url" to "launch" for app: ${urlValue}`);
+          normalized.action = 'launch';
+          normalized.app = urlValue;
+        } else {
+          normalized.url = urlValue;
+        }
         break;
     }
 

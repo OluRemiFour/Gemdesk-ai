@@ -21,6 +21,8 @@ import { FileSystemService } from './services/FileSystemService.js';
 import MongoDBService from './services/MongoDBService.js';
 import { ScreenMonitor } from './services/ScreenMonitor.js';
 import { SkillManager } from './services/SkillManager.js';
+import { autoUpdater } from 'electron-updater';
+import { dialog } from 'electron';
 
 
 let mainWindow = null;
@@ -723,7 +725,33 @@ ipcMain.on('send-input', async (event, { type, data }) => {
   }
 });
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
+  // 1. Create window IMMEDIATELY (Non-blocking)
+  createWindow();
+
+  // 2. Initialize background services asynchronously
+  const initServices = async () => {
+    try {
+      console.log('[Main] Connecting to MongoDB...');
+      const connected = await MongoDBService.connect();
+      if (!connected) {
+        console.warn('[Main] MongoDB connection failed. App is in Offline Mode.');
+      } else {
+        console.log('[Main] MongoDB connected successfully');
+      }
+
+      // 3. Check for updates (Production only)
+      if (app.isPackaged) {
+        autoUpdater.checkForUpdatesAndNotify();
+      }
+    } catch (err) {
+      console.error('[Main] Service initialization error:', err);
+    }
+  };
+
+  initServices();
+
+  // 4. Register global hotkeys
   ipcMain.handle('window:focus', () => {
     if (mainWindow) {
       mainWindow.show();
@@ -731,20 +759,7 @@ app.whenReady().then(async () => {
     }
   });
 
-  console.log('[Main] Connecting to MongoDB...');
-  const connected = await MongoDBService.connect();
-  
-  if (!connected) {
-    console.error('[Main] Failed to connect to MongoDB. The app will start but database features will be unavailable.');
-  } else {
-    console.log('[Main] MongoDB connected successfully');
-  }
-  
-  createWindow();
-
-  // Register global hotkey
   const registered = globalShortcut.register('CommandOrControl+G', () => {
-    console.log('[Main] Global hotkey Ctrl+G triggered');
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -758,8 +773,31 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('global-hotkey-triggered');
     }
   });
-
   console.log('[Main] Hotkey Ctrl+G registered:', registered);
+});
+
+// Auto-updater events
+autoUpdater.on('update-available', () => {
+  if (mainWindow) mainWindow.webContents.send('update-available');
+});
+
+autoUpdater.on('update-downloaded', () => {
+  if (mainWindow) mainWindow.webContents.send('update-downloaded');
+});
+
+// Handle update installation from renderer
+ipcMain.handle('install-update', () => {
+  autoUpdater.quitAndInstall();
+});
+
+// Global Error Handling
+process.on('uncaughtException', (error) => {
+  console.error('[Main] Uncaught Exception:', error);
+  dialog.showErrorBox('Critical Application Error', error.message || 'An unexpected error occurred.');
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Main] Unhandled Rejection:', reason);
 });
 
 app.on('will-quit', () => {

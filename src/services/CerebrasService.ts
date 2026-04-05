@@ -30,7 +30,7 @@ export class CerebrasService {
       throw new Error('No Cerebras API keys provided');
     }
     this.keys = apiKeys;
-    console.log(`[CerebrasService] Initialized with ${apiKeys.length} API key(s)`);
+    // console.log(`[CerebrasService] Initialized with ${apiKeys.length} API key(s)`);
   }
 
   private get currentKey(): string {
@@ -40,7 +40,7 @@ export class CerebrasService {
   private rotateKey() {
     this.currentKeyIndex = (this.currentKeyIndex + 1) % this.keys.length;
     const partial = this.currentKey.substring(0, 8);
-    console.log(`[CerebrasService] Rotated to key index ${this.currentKeyIndex} (${partial}...)`);
+    // console.log(`[CerebrasService] Rotated to key index ${this.currentKeyIndex} (${partial}...)`);
   }
 
   /**

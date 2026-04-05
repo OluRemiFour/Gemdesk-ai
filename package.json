@@ -37,7 +37,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      ".env"
     ],
     "win": {
       "target": [

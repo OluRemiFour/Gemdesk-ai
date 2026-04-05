@@ -122,6 +122,11 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
    - If a file is on the Desktop, use the "Desktop" shortcut prefix (e.g., "Desktop\\\\myfile.pdf") or full absolute path.
    - For PDFs, spreadsheets, or text files, "open-path" will open them in their default application.
+7. **Web & Browser**: 
+   - USE "launch" to open a browser application (e.g., {"action": "launch", "target": "chrome"}).
+   - USE "open-url" ONLY with full web addresses starting with http or https (e.g., {"action": "open-url", "url": "https://gmail.com"}).
+   - NEVER use "open-url" with an app name like "chrome" or "safari".
+   - For searches, use the full search URL (e.g., "https://www.google.com/search?q=restaurants+near+me").
 `;
 
 export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceProps) {

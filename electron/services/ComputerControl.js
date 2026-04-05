@@ -223,10 +223,19 @@ export class ComputerControl {
       const execPromise = util.promisify(exec);
       const background = options.background || false;
       
-      // Ensure URL has protocol
-      let targetUrl = url;
-      if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://') && !targetUrl.includes('://')) {
-        targetUrl = 'https://' + targetUrl;
+      // Ensure URL has protocol and is not just an app name
+      let targetUrl = url.trim();
+      const isDomain = /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/.test(targetUrl);
+      const hasProtocol = targetUrl.includes('://');
+
+      if (!hasProtocol) {
+        if (isDomain || targetUrl.includes('/') || targetUrl.includes('?')) {
+          targetUrl = 'https://' + targetUrl;
+        } else {
+          // If it doesn't look like a URL and has no protocol, try launching it as an app instead
+          console.log(`[ComputerControl] String "${targetUrl}" doesn't look like a URL. Trying as app launch...`);
+          return await this.launchApp(targetUrl, null, options);
+        }
       }
       
       // Use 'start' command on Windows to open in default browser
