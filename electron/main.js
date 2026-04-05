@@ -21,7 +21,8 @@ import { FileSystemService } from './services/FileSystemService.js';
 import MongoDBService from './services/MongoDBService.js';
 import { ScreenMonitor } from './services/ScreenMonitor.js';
 import { SkillManager } from './services/SkillManager.js';
-import { autoUpdater } from 'electron-updater';
+import updaterPkg from 'electron-updater';
+const { autoUpdater } = updaterPkg;
 import { dialog } from 'electron';
 
 
