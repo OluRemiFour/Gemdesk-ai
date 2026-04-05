@@ -12,6 +12,10 @@ export interface ElectronInterface {
   onSessionEvent: (callback: (...args: any[]) => void) => void;
   onGlobalHotkey: (callback: () => void) => () => void;
 
+  // Window close confirmation
+  onWindowCloseRequested: (callback: () => void) => () => void;
+  confirmClose: () => Promise<void>;
+
   // MongoDB Methods
   createChat: (title: string) => Promise<any>;
   getChats: () => Promise<any[]>;
