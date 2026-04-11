@@ -45,6 +45,22 @@ export class AppLauncher {
                 // Text Editors
                 'notepad': ['notepad.exe'], // System path
                 'vscode': [
+                    'code', // Try system PATH first
+                    path.join(process.env.LOCALAPPDATA || '', 'Programs\\Microsoft VS Code\\Code.exe'),
+                    'C:\\Program Files\\Microsoft VS Code\\Code.exe'
+                ],
+                'visual studio code': [
+                    'code',
+                    path.join(process.env.LOCALAPPDATA || '', 'Programs\\Microsoft VS Code\\Code.exe'),
+                    'C:\\Program Files\\Microsoft VS Code\\Code.exe'
+                ],
+                'code': [
+                    'code',
+                    path.join(process.env.LOCALAPPDATA || '', 'Programs\\Microsoft VS Code\\Code.exe'),
+                    'C:\\Program Files\\Microsoft VS Code\\Code.exe'
+                ],
+                'vsc': [
+                    'code',
                     path.join(process.env.LOCALAPPDATA || '', 'Programs\\Microsoft VS Code\\Code.exe'),
                     'C:\\Program Files\\Microsoft VS Code\\Code.exe'
                 ],
@@ -52,15 +68,14 @@ export class AppLauncher {
                     'C:\\Program Files\\Sublime Text 3\\sublime_text.exe'
                 ],
                 // Office
-                'word': ['WINWORD.EXE', 'start winword'],
-                'microsoft word': ['WINWORD.EXE', 'start winword'],
-                'ms word': ['WINWORD.EXE', 'start winword'],
-                'excel': ['EXCEL.EXE', 'start excel'],
-                'microsoft excel': ['EXCEL.EXE', 'start excel'],
-                'ms excel': ['EXCEL.EXE', 'start excel'],
-                'powerpoint': ['POWERPNT.EXE', 'start powerpnt'],
-                'microsoft powerpoint': ['POWERPNT.EXE', 'start powerpnt'],
-                'ms powerpoint': ['POWERPNT.EXE', 'start powerpnt'],
+                'word': ['WINWORD.EXE', 'start winword', 'C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE'],
+                'microsoft word': ['WINWORD.EXE', 'start winword', 'C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE'],
+                'winword': ['WINWORD.EXE', 'start winword'],
+                'excel': ['EXCEL.EXE', 'start excel', 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE'],
+                'microsoft excel': ['EXCEL.EXE', 'start excel', 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE'],
+                'excel.exe': ['EXCEL.EXE', 'start excel'],
+                'powerpoint': ['POWERPNT.EXE', 'start powerpnt', 'C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE'],
+                'microsoft powerpoint': ['POWERPNT.EXE', 'start powerpnt', 'C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE'],
                 // Utilities
                 'calculator': ['calc.exe'],
                 'calc': ['calc.exe'],
@@ -77,12 +92,12 @@ export class AppLauncher {
                     path.join(process.env.LOCALAPPDATA || '', 'Postman\\app-11.81.4\\Postman.exe')
                 ],
                 // System Folders
-                'documents': ['shell:Personal', path.join(os.homedir(), 'Documents')],
-                'downloads': ['shell:Downloads', path.join(os.homedir(), 'Downloads')],
-                'desktop': ['shell:Desktop', path.join(os.homedir(), 'Desktop')],
-                'pictures': ['shell:My Pictures', path.join(os.homedir(), 'Pictures')],
-                'videos': ['shell:My Video', path.join(os.homedir(), 'Videos')],
-                'music': ['shell:My Music', path.join(os.homedir(), 'Music')],
+                'documents': [path.join(os.homedir(), 'Documents'), 'shell:Personal'],
+                'downloads': [path.join(os.homedir(), 'Downloads'), 'shell:Downloads'],
+                'desktop': [path.join(os.homedir(), 'Desktop'), 'shell:Desktop'],
+                'pictures': [path.join(os.homedir(), 'Pictures'), 'shell:My Pictures'],
+                'videos': [path.join(os.homedir(), 'Videos'), 'shell:My Video'],
+                'music': [path.join(os.homedir(), 'Music'), 'shell:My Music'],
                 'recycle bin': ['shell:RecycleBinFolder']
             };
         }
@@ -131,10 +146,10 @@ export class AppLauncher {
         };
 
         console.log(`[AppLauncher] Attempting robust focus: ${titlePattern}`);
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 2; i++) { // Reduced retries from 4 to 2 for speed
             const result = await tryFocus();
             if (result.success) return { success: true, message: `Focused window: ${titlePattern}` };
-            await new Promise(r => setTimeout(r, 1500));
+            if (i < 1) await new Promise(r => setTimeout(r, 600)); // Reduced delay from 1500 to 600
         }
         
         return { success: false, error: `Window not found or could not be focused: ${titlePattern}` };
@@ -233,7 +248,12 @@ export class AppLauncher {
         // Handle shell:AppsFolder or start commands
         if (commandPath.startsWith('shell:') || commandPath.startsWith('start ')) {
              const argsStr = args.length > 0 ? ` ${args.map(a => `"${a}"`).join(' ')}` : '';
-             let finalCmd = commandPath.startsWith('start ') ? commandPath : `start ${commandPath}`;
+             let finalCmd;
+             if (commandPath.startsWith('start ')) {
+                 finalCmd = commandPath;
+             } else {
+                 finalCmd = `start "" "${commandPath}"`;
+             }
              
              if (background && finalCmd.startsWith('start ') && !finalCmd.includes('/min')) {
                  finalCmd = finalCmd.replace('start ', 'start /min ');
@@ -248,7 +268,8 @@ export class AppLauncher {
              const subprocess = spawn(commandPath, args, {
                  detached: true,
                  stdio: 'ignore',
-                 // Windows specific: hide window or launch minimized if possible via shell
+                 // Windows specific: use shell to support .cmd/.bat scripts and hide window if needed
+                 shell: os.platform() === 'win32',
                  windowsHide: background 
              });
              

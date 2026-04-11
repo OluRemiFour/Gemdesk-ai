@@ -32,9 +32,19 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   const audioRef = useRef<HTMLAudioElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
+  
+  // Performance optimizations for mouse tracking
   const lastMouseEmitRef = useRef<number>(0);
   const pendingMouseRef = useRef<{ x: number; y: number } | null>(null);
   const mouseRafRef = useRef<number | null>(null);
+  const cachedDimensionsRef = useRef<{
+    width: number;
+    height: number;
+    videoWidth: number;
+    videoHeight: number;
+    left: number;
+    top: number;
+  } | null>(null);
 
   useEffect(() => {
     if (videoRef.current && remoteStream) {
@@ -174,8 +184,28 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       setBandwidth(2.0 + Math.random() * 1.0);
     }, 1000);
 
+    // Resize observer to keep dimensions cached and accurate
+    const resizeObserver = new ResizeObserver(() => {
+      if (containerRef.current && videoRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        cachedDimensionsRef.current = {
+          width: rect.width,
+          height: rect.height,
+          left: rect.left,
+          top: rect.top,
+          videoWidth: videoRef.current.videoWidth,
+          videoHeight: videoRef.current.videoHeight
+        };
+      }
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
     return () => {
       clearInterval(interval);
+      resizeObserver.disconnect();
       peer.destroy();
       socket.off('session-ended');
       socket.off('viewer-disconnected');
@@ -189,18 +219,26 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   const getRelativeCoords = (e: React.MouseEvent | React.WheelEvent) => {
     if (!videoRef.current || !containerRef.current) return null;
     
-    const rect = containerRef.current.getBoundingClientRect();
-    const video = videoRef.current;
+    // Use cached dimensions if available, otherwise fallback to bounding rect
+    let dims = cachedDimensionsRef.current;
+    if (!dims || dims.videoWidth === 0) {
+      const rect = containerRef.current.getBoundingClientRect();
+      dims = {
+        width: rect.width,
+        height: rect.height,
+        left: rect.left,
+        top: rect.top,
+        videoWidth: videoRef.current.videoWidth,
+        videoHeight: videoRef.current.videoHeight
+      };
+      cachedDimensionsRef.current = dims;
+    }
     
-    // Get actual video dimensions
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
+    const { width: containerWidth, height: containerHeight, left: containerLeft, top: containerTop, videoWidth, videoHeight } = dims;
     
     if (!videoWidth || !videoHeight) return null;
 
     // Calculate scaling and offsets for object-contain
-    const containerWidth = rect.width;
-    const containerHeight = rect.height;
     const containerRatio = containerWidth / containerHeight;
     const videoRatio = videoWidth / videoHeight;
     
@@ -219,15 +257,14 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     }
     
     // Calculate cursor position relative to the ACTUAL video content
-    const x = (e.clientX - rect.left - offsetX) / renderedWidth;
-    const y = (e.clientY - rect.top - offsetY) / renderedHeight;
+    const x = (e.clientX - containerLeft - offsetX) / renderedWidth;
+    const y = (e.clientY - containerTop - offsetY) / renderedHeight;
     
     return { x, y };
   };
 
-  // Throttled mouse move: emit at most every 8ms (~120Hz) and use
-  // requestAnimationFrame to coalesce intermediate moves, reducing
-  // socket flood while keeping movement feeling snappy.
+  // Throttled mouse move: emit at most every 6.6ms (~150Hz) to keep it ultra-snappy 
+  // while avoiding socket congestion. Uses requestAnimationFrame to coalesce moves.
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (isHost || !mouseControlEnabled || !socket) return;
     
@@ -241,14 +278,18 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     const now = performance.now();
     const elapsed = now - lastMouseEmitRef.current;
 
-    // If enough time has passed, emit immediately
-    if (elapsed >= 8) {
+    // If enough time has passed (min 6.6ms for ~150Hz), emit immediately
+    if (elapsed >= 6.6) {
       lastMouseEmitRef.current = now;
       socket.volatile.emit('control-command', {
         sessionId,
         command: { type: 'mouse-move', data: coords }
       });
       pendingMouseRef.current = null;
+      if (mouseRafRef.current) {
+        cancelAnimationFrame(mouseRafRef.current);
+        mouseRafRef.current = null;
+      }
       return;
     }
 

@@ -23,8 +23,17 @@ function JoinSession({ onBack }: JoinSessionProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!sessionActive && inputRef.current) {
-      inputRef.current.focus();
+    if (!sessionActive) {
+      // Use requestAnimationFrame to ensure the focus is applied after 
+      // the DOM has been fully rendered and any transitions are complete.
+      const focusPromptly = () => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      };
+      
+      const animationFrame = requestAnimationFrame(focusPromptly);
+      return () => cancelAnimationFrame(animationFrame);
     }
   }, [sessionActive]);
 

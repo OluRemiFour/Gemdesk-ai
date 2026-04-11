@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electron', {
   getSources: () => ipcRenderer.invoke('get-sources'),
+  getScreenSourceId: () => ipcRenderer.invoke('get-screen-source-id'),
   captureScreenshot: () => ipcRenderer.invoke('screenshot-capture'),
   executeCommand: (command) => ipcRenderer.invoke('execute-command', command),
   

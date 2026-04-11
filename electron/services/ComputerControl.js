@@ -1,6 +1,7 @@
 
 // Wrapper for @nut-tree-fork/nut-js to handle computer control safely
 import { mouse, keyboard, Point, Button, Key } from '@nut-tree-fork/nut-js';
+import { screen } from 'electron';
 
 // Configure nut.js
 mouse.config.autoDelayMs = 0;
@@ -12,6 +13,39 @@ export class ComputerControl {
   constructor() {
     this.isProcessing = false;
     this.launcher = new AppLauncher();
+    
+    // Cache screen dimensions to avoid expensive IPC calls on every mouse move
+    this.cachedScreen = {
+      width: 0,
+      height: 0,
+      lastUpdate: 0
+    };
+    this.updateScreenCache();
+    
+    // Tracking current mouse move to prevent concurrent execution overlap
+    this.isMouseMoveInProgress = false;
+  }
+
+  updateScreenCache() {
+    try {
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.bounds;
+      this.cachedScreen = {
+        width,
+        height,
+        lastUpdate: Date.now()
+      };
+    } catch (err) {
+      console.error('[ComputerControl] Failed to update screen cache:', err);
+    }
+  }
+
+  getScreenDimensions() {
+    // Refresh cache every 10 seconds in case displays changed
+    if (Date.now() - this.cachedScreen.lastUpdate > 10000) {
+      this.updateScreenCache();
+    }
+    return this.cachedScreen;
   }
 
   registerApp(name, path) {
@@ -154,14 +188,14 @@ export class ComputerControl {
       await keyboard.pressKey(Key.LeftSuper);
       await keyboard.releaseKey(Key.LeftSuper);
       
-      // 2. Wait for Start Menu to open (brief delay)
-      await new Promise(resolve => setTimeout(resolve, 800));
+      // 2. Wait for Start Menu to open (brief delay) - tuned for speed
+      await new Promise(resolve => setTimeout(resolve, 400));
       
       // 3. Type the application name
       await keyboard.type(appName);
       
-      // 4. Wait for search results
-      await new Promise(resolve => setTimeout(resolve, 1200));
+      // 4. Wait for search results - tuned for speed
+      await new Promise(resolve => setTimeout(resolve, 600));
       
       // 5. Press Enter to launch
       await keyboard.pressKey(Key.Enter);
@@ -188,15 +222,26 @@ export class ComputerControl {
         return await this.openUrl(appName, options);
     }
 
-    // If appName contains a space and the second part looks like a URL, split it
+    // If appName contains a space, try to intelligently split app name and arguments
     let finalApp = appName;
     let finalArgs = [];
     const parts = appName.split(/\s+/);
+    
     if (parts.length > 1) {
-        const lastPart = parts[parts.length - 1];
-        if (lastPart.includes('.') && (lastPart.startsWith('http') || !lastPart.includes(':'))) {
-            finalApp = parts.slice(0, -1).join(' ');
-            finalArgs = [lastPart];
+        const firstPart = parts[0].toLowerCase();
+        // Common CLI apps that often take paths/args
+        const cliApps = ['code', 'vscode', 'visual studio code', 'notepad', 'explorer', 'chrome', 'edge'];
+        
+        if (cliApps.includes(firstPart)) {
+            finalApp = firstPart;
+            finalArgs = parts.slice(1);
+        } else {
+            const lastPart = parts[parts.length - 1];
+            // If it looks like a URL or a file path (with slash)
+            if (lastPart.includes('.') && (lastPart.startsWith('http') || lastPart.includes('\\') || lastPart.includes('/'))) {
+                finalApp = parts.slice(0, -1).join(' ');
+                finalArgs = [lastPart];
+            }
         }
     }
 
@@ -204,11 +249,69 @@ export class ComputerControl {
         finalArgs.push(url);
     }
 
+    const os = await import('node:os');
+    const fs = await import('node:fs');
+    const pathMod = await import('node:path');
+    const home = os.homedir();
+
+    // [NEW] Resolve relative paths for finalApp to absolute paths (Desktop/Documents)
+    if (finalApp && !pathMod.isAbsolute(finalApp) && !finalApp.startsWith('http')) {
+        // Try resolving as a file/folder on Desktop or Documents
+        const desktopPath = pathMod.join(home, 'Desktop', finalApp);
+        const docsPath = pathMod.join(home, 'Documents', finalApp);
+        
+        try {
+            await fs.promises.access(desktopPath);
+            finalApp = desktopPath;
+        } catch {
+            try {
+                await fs.promises.access(docsPath);
+                finalApp = docsPath;
+            } catch {
+                // Keep as is
+            }
+        }
+    }
+
+    // [NEW] Resolve relative paths in arguments to absolute paths (Desktop/Documents)
+    if (finalArgs.length > 0) {
+        finalArgs = await Promise.all(finalArgs.map(async (arg) => {
+            if (typeof arg !== 'string' || pathMod.isAbsolute(arg) || arg.startsWith('http')) return arg;
+            
+            // Check if it's a common alias
+            const lowerArg = arg.toLowerCase();
+            let resolved = arg;
+            
+            if (lowerArg === 'desktop') resolved = pathMod.join(home, 'Desktop');
+            else if (lowerArg === 'documents') resolved = pathMod.join(home, 'Documents');
+            else {
+                // Try resolving as a file/folder on Desktop or Documents
+                const desktopPath = pathMod.join(home, 'Desktop', arg);
+                const docsPath = pathMod.join(home, 'Documents', arg);
+                
+                try {
+                    await fs.promises.access(desktopPath);
+                    resolved = desktopPath;
+                } catch {
+                    try {
+                        await fs.promises.access(docsPath);
+                        resolved = docsPath;
+                    } catch {
+                        // Keep as is
+                    }
+                }
+            }
+            
+            return resolved;
+        }));
+    }
+
+    console.log(`[ComputerControl] Launching app: "${finalApp}" with args:`, finalArgs);
     // Standard app launch via launcher
     const launchResult = await this.launcher.launchApp(finalApp, finalArgs, options);
     
     // Fallback logic: If programmatic launch fails, try Start Menu Search (very reliable on Windows)
-    if (!launchResult.success && os.platform() === 'win32') {
+    if (!launchResult.success && os.platform() === 'win32' && !path.isAbsolute(finalApp)) {
         console.log(`[ComputerControl] Programmatic launch failed for "${finalApp}", trying Start Menu fallback...`);
         return await this.startAndSearch(finalApp);
     }
@@ -229,6 +332,13 @@ export class ComputerControl {
       const hasProtocol = targetUrl.includes('://');
 
       if (!hasProtocol) {
+        const commonApps = ['chrome', 'google chrome', 'firefox', 'edge', 'msedge', 'microsoft edge', 'brave', 'opera', 'safari', 'whatsapp', 'vscode', 'notepad', 'word', 'excel', 'powerpoint', 'winword', 'excel.exe', 'code'];
+        
+        if (commonApps.includes(targetUrl.toLowerCase())) {
+           console.log(`[ComputerControl] String "${targetUrl}" is a known app. Redirecting to launchApp...`);
+           return await this.launchApp(targetUrl, null, options);
+        }
+
         if (isDomain || targetUrl.includes('/') || targetUrl.includes('?')) {
           targetUrl = 'https://' + targetUrl;
         } else {
@@ -250,7 +360,7 @@ export class ComputerControl {
     }
   }
 
-  async createDoc(filename, content) {
+  async createDoc(filename, content, options = {}) {
     try {
       const { exec } = await import('node:child_process');
       const util = await import('node:util');
@@ -259,8 +369,11 @@ export class ComputerControl {
       const path = await import('node:path');
       const os = await import('node:os');
 
-      const docPath = path.join(os.homedir(), 'Documents', filename || `doc_${Date.now()}.docx`);
+      const targetDir = options.directory || path.join(os.homedir(), 'Documents');
+      const docPath = path.join(targetDir, filename || `doc_${Date.now()}.docx`);
+      
       // Escape content for PowerShell - ensure it's a string
+      const escapedContent = (content || '').replace(/"/g, '`"').replace(/\n/g, '`n');
 
       // PowerShell Script to create a Word document via COM
       const psScript = `
@@ -303,16 +416,23 @@ export class ComputerControl {
    */
   async handleRawInput(type, data) {
     try {
-      const { screen } = await import('electron');
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.bounds;
+      const { width, height } = this.getScreenDimensions();
 
       switch (type) {
         case 'mouse-move': {
           if (data.x !== undefined && data.y !== undefined) {
              const absX = Math.round(data.x * width);
              const absY = Math.round(data.y * height);
-             await mouse.setPosition(new Point(absX, absY));
+             
+             // Prevent overlap of movement commands to keep the event loop snappy
+             if (this.isMouseMoveInProgress) return;
+             
+             this.isMouseMoveInProgress = true;
+             try {
+               await mouse.setPosition(new Point(absX, absY));
+             } finally {
+               this.isMouseMoveInProgress = false;
+             }
           }
           break;
         }

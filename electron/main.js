@@ -183,6 +183,12 @@ ipcMain.handle('get-sources', async () => {
   }));
 });
 
+ipcMain.handle('get-screen-source-id', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+  return sources.length > 0 ? sources[0].id : null;
+});
+
+
 // IPC for high-quality screenshot capture specifically for AI
 ipcMain.handle('screenshot-capture', async () => {
   try {
@@ -259,7 +265,7 @@ ipcMain.handle('execute-action', async (event, action) => {
         if (app) {
           console.log(`[Main] Focusing ${app} before click`);
           await computerControl.focusWindow(app);
-          await new Promise(r => setTimeout(r, 500));
+          // Removed redundant 500ms delay as focusWindow is now more efficient
         }
         return await computerControl.click(target.x, target.y, type);
       }
@@ -274,11 +280,19 @@ ipcMain.handle('execute-action', async (event, action) => {
     case 'launch':
     case 'open-path':
     case 'open-url': {
-      const targetPath = action.path || action.target || action.app || action.url;
-      if (!targetPath) return { success: false, error: 'No path or app specified' };
+      const app = action.app;
+      const target = action.path || action.target || action.url;
       
-      // Special handling for common folder names and shortcuts
-      let finalPath = targetPath;
+      if (!app && !target) return { success: false, error: 'No app or path specified' };
+
+      // Case 1: Explicit application launch (potentially with a target)
+      if (app) {
+        console.log(`[Main] Launching app "${app}"` + (target ? ` with target "${target}"` : ''));
+        return await computerControl.launchApp(app, target, { background });
+      }
+
+      // Case 2: Opening a path or URL directly (using default handler)
+      let finalPath = target;
       if (!path.isAbsolute(finalPath) && !finalPath.startsWith('http') && !finalPath.includes('://')) {
         const parts = finalPath.split(/[\\/]/);
         const firstPart = parts[0].toLowerCase();
@@ -293,8 +307,7 @@ ipcMain.handle('execute-action', async (event, action) => {
         }
       }
 
-      console.log(`[Main] Executing ${type} with resolved path:`, finalPath);
-
+      console.log(`[Main] Opening path/URL:`, finalPath);
       if (type === 'open-url' || finalPath.startsWith('http') || finalPath.includes('://')) {
         return await computerControl.openUrl(finalPath, { background });
       }
@@ -325,19 +338,8 @@ ipcMain.handle('execute-action', async (event, action) => {
 
     // Create folder (mkdir) with proper permissions
     case 'create-folder': {
-      const folderPath = action.path || target;
-      try {
-        await fs.promises.mkdir(folderPath, { recursive: true });
-        return { success: true, message: `Folder created: ${folderPath}` };
-      } catch (err) {
-        // Fallback: try via PowerShell (handles permission issues)
-        try {
-          await execPromise(`powershell -Command "New-Item -ItemType Directory -Force -Path '${folderPath}'"`)
-          return { success: true, message: `Folder created via PowerShell: ${folderPath}` };
-        } catch (psErr) {
-          return { success: false, error: psErr.message };
-        }
-      }
+      let folderPath = action.path || target;
+      return await fileSystem.createFolder(folderPath);
     }
       
     case 'get-recycle-bin':
@@ -357,7 +359,16 @@ ipcMain.handle('execute-action', async (event, action) => {
     }
 
     case 'create-doc': {
-      return await computerControl.createDoc(action.filename, action.content);
+      let directory = action.directory || action.path;
+      if (directory && !path.isAbsolute(directory)) {
+        const home = os.homedir();
+        if (directory.toLowerCase() === 'desktop') {
+          directory = path.join(home, 'Desktop');
+        } else if (directory.toLowerCase() === 'documents') {
+          directory = path.join(home, 'Documents');
+        }
+      }
+      return await computerControl.createDoc(action.filename, action.content, { directory });
     }
 
     case 'save-skill': {
@@ -720,9 +731,13 @@ ipcMain.handle('db:delete-chat', async (event, chatId) => {
 });
 
 // Direct Input Injection (For Remote Control)
-ipcMain.on('send-input', async (event, { type, data }) => {
+ipcMain.on('send-input', (event, { type, data }) => {
   if (computerControl) {
-    await computerControl.handleRawInput(type, data);
+    // We don't await here to keep the IPC channel responsive.
+    // ComputerControl.handleRawInput handles internal concurrency for mouse moves.
+    computerControl.handleRawInput(type, data).catch(err => {
+      console.error('[Main] handleRawInput error:', err);
+    });
   }
 });
 

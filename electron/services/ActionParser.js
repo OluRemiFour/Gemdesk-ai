@@ -13,7 +13,12 @@ export class ActionParser {
     
     // Normalize action type
     const actionType = rawAction.action?.toLowerCase();
-    const validActions = ['click', 'doubleclick', 'rightclick', 'type', 'keypress', 'launch', 'wait', 'scroll', 'open-url'];
+    const validActions = [
+      'click', 'doubleclick', 'rightclick', 'type', 'keypress', 'launch', 'wait', 'scroll', 'open-url',
+      'list-dir', 'read-file', 'write-file', 'delete-file', 'move-file', 'rename-file', 'create-folder',
+      'create-doc', 'save-document', 'create-project', 'whatsapp-chat', 'whatsapp-call', 'whatsapp-initiate-call-dropdown',
+      'create-browser', 'navigate-browser', 'capture-browser', 'close-browser', 'eval-browser'
+    ];
     
     if (!validActions.includes(actionType)) {
       console.warn(`[ActionParser] Invalid action type: ${actionType}`);
@@ -52,7 +57,7 @@ export class ActionParser {
       case 'open-url':
         if (!normalized.url && !normalized.target) return null;
         let urlValue = (normalized.url || normalized.target).trim();
-        const commonApps = ['chrome', 'google chrome', 'firefox', 'edge', 'msedge', 'microsoft edge', 'brave', 'opera', 'safari', 'whatsapp', 'vscode', 'notepad'];
+        const commonApps = ['chrome', 'google chrome', 'firefox', 'edge', 'msedge', 'microsoft edge', 'brave', 'opera', 'safari', 'whatsapp', 'vscode', 'visual studio code', 'notepad', 'word', 'excel', 'powerpoint', 'winword', 'excel.exe'];
         
         if (commonApps.includes(urlValue.toLowerCase())) {
           console.log(`[ActionParser] Auto-correcting "open-url" to "launch" for app: ${urlValue}`);
@@ -61,6 +66,52 @@ export class ActionParser {
         } else {
           normalized.url = urlValue;
         }
+        break;
+
+      case 'create-folder':
+        if (!normalized.path && !normalized.target && !normalized.name && !normalized.folderName) return null;
+        const bDir = (normalized.path || normalized.target || '').trim();
+        const fName = (normalized.name || normalized.folderName || '').trim();
+        
+        if (bDir && fName && !bDir.toLowerCase().includes(fName.toLowerCase())) {
+          // Join path and name if they are both present and name isn't already in path
+          normalized.path = bDir.endsWith('/') || bDir.endsWith('\\') ? `${bDir}${fName}` : `${bDir}/${fName}`;
+        } else {
+          normalized.path = bDir || fName;
+        }
+        break;
+
+      case 'list-dir':
+      case 'read-file':
+      case 'delete-file':
+        if (!normalized.path && !normalized.target) return null;
+        normalized.path = normalized.path || normalized.target;
+        break;
+      
+      case 'write-file':
+        if ((!normalized.path && !normalized.target) || normalized.content === undefined) return null;
+        normalized.path = normalized.path || normalized.target;
+        break;
+
+      case 'create-doc':
+      case 'save-document':
+        if (!normalized.filename && !normalized.target && !normalized.name) return null;
+        normalized.filename = normalized.filename || normalized.target || normalized.name;
+        // Check for directory preference
+        const dirPref = normalized.directory || normalized.path || normalized.folder;
+        if (dirPref) normalized.directory = dirPref;
+        break;
+      
+      case 'whatsapp-chat':
+      case 'whatsapp-call':
+        if (!normalized.contact && !normalized.target && !normalized.name) return null;
+        normalized.contact = normalized.contact || normalized.target || normalized.name;
+        break;
+
+      case 'create-browser':
+      case 'navigate-browser':
+        if (!normalized.url && !normalized.target) return null;
+        normalized.url = normalized.url || normalized.target;
         break;
     }
 
