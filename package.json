@@ -40,16 +40,26 @@
       "package.json",
       ".env"
     ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/@nut-tree-fork/nut-js/**/*",
+      "**/node_modules/sharp/**/*"
+    ],
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GemDesk"
     }
   },
   "dependencies": {

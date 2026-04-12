@@ -125,17 +125,17 @@ export class ActionParser {
    * @returns {object[]} Array of found action objects
    */
   static extractActionsFromText(text) {
+    if (!text) return [];
     const actions = [];
     
-    // Look for JSON blocks
-    const jsonBlockRegex = /```json\s*([\s\S]*?)\s*```/g;
+    // 1. First, look for standard JSON blocks
+    const jsonBlockRegex = /```json\s*([\s\S]*?)\s*```/gi;
     let match;
     
     while ((match = jsonBlockRegex.exec(text)) !== null) {
       try {
         const content = match[1];
         const parsed = JSON.parse(content);
-        
         if (Array.isArray(parsed)) {
           parsed.forEach(item => {
             const valid = ActionParser.parse(item);
@@ -146,7 +146,27 @@ export class ActionParser {
           if (valid) actions.push(valid);
         }
       } catch (e) {
-        console.warn('[ActionParser] Failed to parse JSON block:', e);
+        console.warn('[ActionParser] Failed to parse JSON block:', e.message);
+      }
+    }
+
+    // 2. Fallback: If no actions found in blocks, try to find raw JSON objects
+    // Look for objects containing "action" or "type" keys
+    if (actions.length === 0) {
+      // Look for something that looks like a JSON object containing an action key
+      const rawJsonRegex = /\{[\s\S]*?["'](?:action|type)["'][\s\S]*?\}/g;
+      const rawMatches = text.match(rawJsonRegex);
+      
+      if (rawMatches) {
+        rawMatches.forEach(rawMatch => {
+          try {
+            const parsed = JSON.parse(rawMatch.trim());
+            const valid = ActionParser.parse(parsed);
+            if (valid) actions.push(valid);
+          } catch (e) {
+            // Ignore failed raw attempts
+          }
+        });
       }
     }
     

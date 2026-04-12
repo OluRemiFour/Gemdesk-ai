@@ -85,7 +85,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
 
     peerRef.current = peer;
 
-    peer.on('signal', (data) => {
+    peer.on('signal', (data: any) => {
       socket.emit('signal', {
         sessionId,
         signal: data
@@ -256,9 +256,9 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       offsetY = (containerHeight - renderedHeight) / 2;
     }
     
-    // Calculate cursor position relative to the ACTUAL video content
-    const x = (e.clientX - containerLeft - offsetX) / renderedWidth;
-    const y = (e.clientY - containerTop - offsetY) / renderedHeight;
+    // Calculate cursor position relative to the ACTUAL video content (clamped 0-1)
+    const x = Math.max(0, Math.min(1, (e.clientX - containerLeft - offsetX) / renderedWidth));
+    const y = Math.max(0, Math.min(1, (e.clientY - containerTop - offsetY) / renderedHeight));
     
     return { x, y };
   };

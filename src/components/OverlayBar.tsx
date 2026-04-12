@@ -67,9 +67,19 @@ CORE BEHAVIOR:
    - Step 3: Another screenshot showing the call dropdown will be provided. Output a \`click\` action on either "Audio call" or "Video call" based on the user's request. Include "app": "WhatsApp".
    - **CRITICAL**: Do NOT narrate these steps. Just perform the current step silently.
 5. **Formatting**: For solutions and explanations, use proper markdown headings (##, ###) and numbered lists. Do NOT use raw **bold** markers — use headings instead. Use minimal vertical spacing (avoid blank lines between list items).
+   **DATA RESULTS**: If the user asks to "generate data", "extract info", or "summarize results" in a structured way, use the \`data-result\` action: 
+   \`\`\`json
+   { "action": "data-result", "content": "MARKKDOWN_CONTENT", "title": "RESULT_TITLE", "reasoning": "..." }
+   \`\`\`
+   This will display the result in a dedicated solution modal. Use this for ANY data-heavy response.
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
 
-Available actions: launch, open-url, type, keypress, click, list-dir, read-file, save-document, create-project, create-folder, rename-file, whatsapp-chat, whatsapp-call, create-doc, open-path.`;
+### APP PREFERENCES:
+- **Email**: When asked to "open email", "check mail", or "gmail", use \`"app": "email"\`. We prioritize Chrome browser for email.
+- **VS Code**: Use \`"app": "code"\` or \`"app": "vscode"\`.
+- **NO NARRATION**: NEVER include your JSON action in conversational text. Just output the block at the end.
+
+Available actions: launch, open-url, type, keypress, click, list-dir, read-file, save-document, create-project, create-folder, rename-file, whatsapp-chat, whatsapp-call, create-doc, open-path, data-result.`;
 
 interface ResponseBubble {
   text: string;
@@ -196,19 +206,30 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
   };
 
   // ── TTS ────────────────────────────────────────────────────────────────────
-  const speak = useCallback((text: string) => {
+  const speak = useCallback((text: string, isAuto = false, isNecessary = false) => {
     return new Promise<void>((resolve) => {
       if (!settings.ttsEnabled || !text) {
         resolve();
         return;
       }
 
-      // Check for long text or code blocks
-      const isTooLong = text.length > 150;
-      const containsCode = text.includes('```');
+      const words = text.trim().split(/\s+/);
+      if (isAuto && words.length > 12) {
+        console.log('[OverlayBar] Skipping auto-speak: too long (', words.length, 'words)');
+        resolve();
+        return;
+      }
 
-      if (isTooLong || containsCode) {
-        console.log('[OverlayBar] Skipping TTS for long response or code block.');
+      if (isAuto && !isNecessary) {
+        console.log('[OverlayBar] Skipping auto-speak: not necessary');
+        resolve();
+        return;
+      }
+
+      // Check for code blocks (manual limit still applies in some cases, but auto-TTS definitely skips them)
+      const containsCode = text.includes('```');
+      if (isAuto && containsCode) {
+        console.log('[OverlayBar] Skipping auto-speak: contains code block.');
         resolve();
         return;
       }
@@ -228,12 +249,43 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
   // ── Parse & Execute Action ─────────────────────────────────────────────────
   const maybeExecuteAction = async (text: string) => {
     try {
-      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
-      if (!jsonMatch) return;
+      // 1. Robust JSON Extraction
+      // Try block match first
+      let jsonStr = '';
+      const blockMatch = text.match(/```json\s*([\s\S]*?)\s*```/i);
+      
+      if (blockMatch) {
+        jsonStr = blockMatch[1];
+      } else {
+        // Fallback: look for raw JSON object
+        const rawMatch = text.match(/\{[\s\S]*?"action":[\s\S]*?\}/);
+        if (rawMatch) jsonStr = rawMatch[0];
+      }
 
-      const json = JSON.parse(jsonMatch[1]);
+      if (!jsonStr) {
+        // Correct state if no action was actually found despite string matches earlier
+        // We use a small timeout to ensure the state update from showBubble('Processing...') has processed
+        setTimeout(() => {
+          setResponseBubble(prev => prev?.text === 'Processing...' ? null : prev);
+        }, 100);
+        return;
+      }
+
+      const json = JSON.parse(jsonStr.trim());
       const actionType = json.action || json.type;
       
+      // Handle data-result
+      if (actionType === 'data-result') {
+        const title = json.title || 'Data Result';
+        const content = json.content || json.text || '';
+        setSolutionTitle(title);
+        setSolutionContent(content);
+        setShowSolution(true);
+        setIsInputMode(false);
+        showBubble(`Generated: ${title}`);
+        return;
+      }
+
       // Handle info requests
       if (actionType === 'request-info') {
         setInputRequest({
@@ -262,8 +314,12 @@ export default function OverlayBar({ onClose, onToggleMode, onToggleChat }: Over
         if (autoExecActions.includes(normalizedAction.type)) {
           console.log(`[OverlayBar] Auto-executing action: ${normalizedAction.type}`);
           const result = await window.electron.executeAction(normalizedAction);
-          if (result.success) {
-            showBubble(`Processing...`);
+          
+          if (result && result.success) {
+            // Only update processing bubble if it's still showing the default message
+            if (responseBubble?.text === 'Processing...') {
+                showBubble(`Action executed successfully.`);
+            }
             
             // Auto-followup for multi-step flows
             if (normalizedAction.type === 'whatsapp-call' && result.screenshot) {
@@ -302,13 +358,15 @@ Always include "app": "WhatsApp" in your JSON.` },
           }
         } else {
           setPendingAction(normalizedAction);
-          setIsInputMode(false); // Ensure input mode is off if not requesting info
-          // Potentially show a confirmation UI for non-auto-executed actions
+          setIsInputMode(false);
         }
       }
     } catch (e) {
-      console.error('[OverlayBar] Action parse error:', e);
-      showBubble('Failed to parse AI action.', true);
+      console.error('[OverlayBar] Action parse/exec error:', e);
+      // If we showed "Processing..." but parsing failed, clear it
+      setTimeout(() => {
+        setResponseBubble(prev => prev?.text === 'Processing...' ? null : prev);
+      }, 100);
     }
   };
 
@@ -366,13 +424,18 @@ Always include "app": "WhatsApp" in your JSON.` },
       const cleanText = responseText
         .replace(/TITLE:.*\n?/g, '')
         .replace(/TRANSCRIPTION:.*\n?/g, '')
-        .replace(/```json\s*{[\s\S]*?"action":[\s\S]*?}\s*```/gi, '') // Only strip blocks with "action":
+        .replace(/```json\s*[\s\S]*?```/gi, '') // Strip ALL JSON blocks
+        .replace(/\{[\s\S]*?["']action["'][\s\S]*?\}/gi, '') // Strip raw JSON objects with "action" matching
+        .replace(/```/g, '') // Clean up any stray backticks leftover
         .trim();
 
       // 5. Detect code blocks for Solution Modal (ignore JSON actions)
       const hasAction = responseText.includes('"action":') || responseText.includes('"type":');
       const codeMatches = responseText.match(/```(?!(?:json|JSON))[\s\S]*?```/g);
-      const isLargeResponse = (responseText.length > 250 || codeMatches) && !hasAction;
+      
+      // Implement the 15-word threshold for solution modal
+      const wordCount = cleanText.trim().split(/\s+/).length;
+      const isLargeResponse = (wordCount > 15 || codeMatches) && !hasAction;
 
       if (isLargeResponse) {
         // Show cleanText in the modal; if code blocks exist, append them
@@ -380,20 +443,25 @@ Always include "app": "WhatsApp" in your JSON.` },
         setShowSolution(true);
         setIsInputMode(false);
         showBubble("Check the detailed response in the panel.");
-      } else {
-        showBubble(cleanText || (hasAction ? 'Processing...' : 'Action queued.'));
+      } else if (cleanText) {
+        showBubble(cleanText);
+      } else if (hasAction) {
+        showBubble('Processing...');
       }
       
-      // Speak then check for clarification
-      await speak(cleanText);
-      
-      // Automatic recording if it's a clarification (contains ?)
-      if (cleanText.includes('?') && !isChatMode) {
-        console.log('[OverlayBar] Clarification detected, auto-starting recording...');
-        startRecording();
-      }
+      // Decouple Action Execution from Speech and Modal
+      // 1. Kick off action execution immediately (robust parsing will handle cleanup if it's not actually an action)
+      maybeExecuteAction(responseText);
 
-      await maybeExecuteAction(responseText);
+      // 2. Speak then check for clarification (async)
+      const isNecessary = updatedHistory[updatedHistory.length - 2].parts.some((p: any) => p.inlineData && p.inlineData.mimeType.startsWith('audio')) || cleanText.includes('?') || hasAction;
+      speak(cleanText, true, isNecessary).then(() => {
+        // Automatic recording if it's a clarification (contains ?)
+        if (cleanText.includes('?') && !isChatMode) {
+          console.log('[OverlayBar] Clarification detected, auto-starting recording...');
+          startRecording();
+        }
+      });
     } catch (err: any) {
       console.error('[OverlayBar] Gemini error:', err);
       const errorMsg = err?.message?.includes('429')
@@ -718,7 +786,7 @@ Always include "app": "WhatsApp" in your JSON.` },
               exit={{ x: 400, opacity: 0 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               onClick={(e) => e.stopPropagation()}
-              className="absolute right-8 bottom-24 z-10 w-full max-w-sm bg-[#111]/95 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-[0_30px_100px_rgba(0,0,0,0.8)] overflow-hidden pointer-events-auto mb-4"
+              className="absolute right-8 bottom-24 z-10 w-full max-w-md bg-[#111]/95 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-[0_30px_100px_rgba(0,0,0,0.8)] overflow-hidden pointer-events-auto mb-4"
             >
               {/* Header */}
               <div className="flex items-center justify-between px-6 py-5 border-b border-white/5">
@@ -840,14 +908,11 @@ Always include "app": "WhatsApp" in your JSON.` },
             onMouseLeave={handleMouseLeave}
           >
             <motion.div
-              drag
-              dragMomentum={false}
               initial={{ x: -400, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: -400, opacity: 0 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="absolute left-8 bottom-24 z-10 w-full max-w-xl bg-[#111]/95 backdrop-blur-3xl border border-white/10 rounded-[2rem] shadow-[0_30px_100px_rgba(0,0,0,0.8)] overflow-hidden pointer-events-auto mb-4"
-              style={{ resize: 'both', minWidth: '320px', minHeight: '270px' }}
+              className="absolute left-8 bottom-24 z-10 w-[650px] max-h-[65vh] bg-[#0E0E0E]/95 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-[0_30px_100px_rgba(0,0,0,0.8)] overflow-hidden pointer-events-auto flex flex-col mb-4"
             >
               {/* Header */}
               <div className="flex items-center justify-between px-6 py-5 border-b border-white/5">
@@ -866,7 +931,7 @@ Always include "app": "WhatsApp" in your JSON.` },
               </div>
 
               {/* Body */}
-              <div className="p-6 flex flex-col gap-4">
+              <div className="p-6 flex flex-col gap-4 flex-1 min-h-0 overflow-hidden">
                 {isInputMode ? (
                   <>
                     <div className="space-y-1">
@@ -891,8 +956,8 @@ Always include "app": "WhatsApp" in your JSON.` },
                   </>
                 ) : (
                   <>
-                    <div className="bg-black/40 rounded-xl p-4 max-h-[40vh] overflow-y-auto custom-scrollbar">
-                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-1 [&>ol]:mb-1.5 [&>ul]:mb-1.5 [&>h1]:mb-1 [&>h2]:mb-1 [&>h3]:mb-1 whitespace-pre-line">
+                    <div className="bg-black/40 rounded-xl p-4 flex-1 overflow-y-auto custom-scrollbar">
+                      <div className="prose prose-invert prose-sm max-w-none leading-relaxed [&>p]:mb-1 [&>ol]:mb-1.5 [&>ul]:mb-1.5 [&>h1]:mb-1 [&>h2]:mb-1 [&>h3]:mb-1">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {solutionContent}
                         </ReactMarkdown>

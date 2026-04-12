@@ -1,20 +1,47 @@
 import dotenv from 'dotenv';
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen } from 'electron';
-// Load environment variables as early as possible
-dotenv.config();
-
-import { exec } from 'node:child_process';
-import util from 'node:util';
+import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, dialog } from 'electron';
+import fs from 'node:fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'node:child_process';
+import util from 'node:util';
+
+// Load environment variables as early as possible
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const execPromise = util.promisify(exec);
 
+// --- STARTUP LOGGING SYSTEM ---
+const logPath = path.join(os.homedir(), 'gemdesk-startup.log');
+function logToFile(message) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}\n`;
+    fs.appendFileSync(logPath, logMessage);
+    console.log(message);
+  } catch (err) {
+    // Fallback if home dir logging fails
+    try {
+      fs.appendFileSync('gemdesk-fallback.log', `[${new Date().toISOString()}] ${message}\n`);
+    } catch (e) {}
+  }
+}
+
+logToFile('========================================');
+logToFile('--- GemDesk Application Initialization ---');
+logToFile(`Platform: ${os.platform()}`);
+logToFile(`Node Version: ${process.version}`);
+logToFile(`Exec Path: ${process.execPath}`);
+logToFile(`CWD: ${process.cwd()}`);
+logToFile(`Versions: ${JSON.stringify(process.versions)}`);
+logToFile(`Dirname: ${__dirname}`);
+logToFile(`Is Packaged: ${app.isPackaged}`);
+// --------------------------------------
+
 import { ObjectId } from 'mongodb';
-import fs from 'node:fs';
-import os from 'os';
 import { BrowserSandbox } from './services/BrowserSandbox.js';
 import { ComputerControl } from './services/ComputerControl.js';
 import { FileSystemService } from './services/FileSystemService.js';
@@ -23,7 +50,6 @@ import { ScreenMonitor } from './services/ScreenMonitor.js';
 import { SkillManager } from './services/SkillManager.js';
 import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
-import { dialog } from 'electron';
 
 
 let mainWindow = null;
@@ -59,6 +85,15 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win.show();
+    logToFile('[Main] Window ready-to-show triggered');
+  });
+
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    logToFile(`[Main] Window failed to load: ${errorCode} - ${errorDescription} (${validatedURL})`);
+  });
+
+  win.webContents.on('crashed', (event, killed) => {
+    logToFile(`[Main] Window crashed! Killed: ${killed}`);
   });
 
   // Intercept the close button — ask renderer for confirmation
@@ -70,12 +105,27 @@ function createWindow() {
   
   mainWindow = win;
 
+  logToFile('[Main] Initializing desktop services...');
   // Initialize services with window reference
-  computerControl = new ComputerControl();
-  screenMonitor = new ScreenMonitor(mainWindow);
-  fileSystem = new FileSystemService();
-  skillManager = new SkillManager();
-  browserSandbox = new BrowserSandbox();
+  try {
+    computerControl = new ComputerControl();
+    logToFile('[Main] ComputerControl initialized');
+    
+    screenMonitor = new ScreenMonitor(mainWindow);
+    logToFile('[Main] ScreenMonitor initialized');
+    
+    fileSystem = new FileSystemService();
+    logToFile('[Main] FileSystemService initialized');
+    
+    skillManager = new SkillManager();
+    logToFile('[Main] SkillManager initialized');
+    
+    browserSandbox = new BrowserSandbox();
+    logToFile('[Main] BrowserSandbox initialized');
+  } catch (err) {
+    logToFile(`[Main] Service initialization error: ${err.message}`);
+    logToFile(err.stack);
+  }
 }
 
 function createOverlayWindow() {
@@ -742,13 +792,15 @@ ipcMain.on('send-input', (event, { type, data }) => {
 });
 
 app.whenReady().then(() => {
+  logToFile('[Main] App ready event received');
   // 1. Create window IMMEDIATELY (Non-blocking)
   createWindow();
 
   // 2. Initialize background services asynchronously
   const initServices = async () => {
     try {
-      console.log('[Main] Connecting to MongoDB...');
+      logToFile('[Main] Starting background services...');
+      logToFile('[Main] Connecting to MongoDB...');
       const connected = await MongoDBService.connect();
       if (!connected) {
         console.warn('[Main] MongoDB connection failed. App is in Offline Mode.');

@@ -98,7 +98,12 @@ export class AppLauncher {
                 'pictures': [path.join(os.homedir(), 'Pictures'), 'shell:My Pictures'],
                 'videos': [path.join(os.homedir(), 'Videos'), 'shell:My Video'],
                 'music': [path.join(os.homedir(), 'Music'), 'shell:My Music'],
-                'recycle bin': ['shell:RecycleBinFolder']
+                'recycle bin': ['shell:RecycleBinFolder'],
+                // Web Apps / Productivity
+                'email': ['start chrome https://mail.google.com', 'start msedge https://outlook.live.com', 'https://mail.google.com'],
+                'gmail': ['start chrome https://mail.google.com', 'https://mail.google.com'],
+                'outlook': ['start chrome https://outlook.live.com', 'OUTLOOK.EXE'],
+                'mail': ['start chrome https://mail.google.com', 'https://mail.google.com']
             };
         }
         return {};

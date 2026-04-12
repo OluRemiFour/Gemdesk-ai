@@ -421,8 +421,8 @@ export class ComputerControl {
       switch (type) {
         case 'mouse-move': {
           if (data.x !== undefined && data.y !== undefined) {
-             const absX = Math.round(data.x * width);
-             const absY = Math.round(data.y * height);
+             const absX = Math.round(data.x * (width - 1));
+             const absY = Math.round(data.y * (height - 1));
              
              // Prevent overlap of movement commands to keep the event loop snappy
              if (this.isMouseMoveInProgress) return;
@@ -438,8 +438,8 @@ export class ComputerControl {
         }
         case 'click': {
           if (data.x !== undefined && data.y !== undefined) {
-             const absX = Math.round(data.x * width);
-             const absY = Math.round(data.y * height);
+             const absX = Math.round(data.x * (width - 1));
+             const absY = Math.round(data.y * (height - 1));
              await mouse.setPosition(new Point(absX, absY));
           }
           const btn = data.button === 'right' ? Button.RIGHT : Button.LEFT;
@@ -448,8 +448,8 @@ export class ComputerControl {
         }
         case 'mouse-down': {
           if (data.x !== undefined && data.y !== undefined) {
-             const absX = Math.round(data.x * width);
-             const absY = Math.round(data.y * height);
+             const absX = Math.round(data.x * (width - 1));
+             const absY = Math.round(data.y * (height - 1));
              await mouse.setPosition(new Point(absX, absY));
           }
           const btn = data.button === 'right' ? Button.RIGHT : Button.LEFT;
@@ -458,8 +458,8 @@ export class ComputerControl {
         }
         case 'mouse-up': {
           if (data.x !== undefined && data.y !== undefined) {
-             const absX = Math.round(data.x * width);
-             const absY = Math.round(data.y * height);
+             const absX = Math.round(data.x * (width - 1));
+             const absY = Math.round(data.y * (height - 1));
              await mouse.setPosition(new Point(absX, absY));
           }
           const btn = data.button === 'right' ? Button.RIGHT : Button.LEFT;
