@@ -30,9 +30,11 @@ export class ComputerControl {
     try {
       const primaryDisplay = screen.getPrimaryDisplay();
       const { width, height } = primaryDisplay.bounds;
+      // Use scaleFactor to ensure calculations use physical pixels on High DPI displays
+      const scaleFactor = primaryDisplay.scaleFactor || 1;
       this.cachedScreen = {
-        width,
-        height,
+        width: Math.round(width * scaleFactor),
+        height: Math.round(height * scaleFactor),
         lastUpdate: Date.now()
       };
     } catch (err) {

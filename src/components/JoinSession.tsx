@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,6 +8,8 @@ import { io, Socket } from 'socket.io-client';
 import { ChatService } from '@/services/ChatService';
 
 const SOCKET_URL = import.meta.env.VITE_SIGNALING_SERVER || 'http://localhost:3001';
+// How long (ms) to wait for the host to approve before giving up
+const APPROVAL_TIMEOUT_MS = 30_000;
 
 interface JoinSessionProps {
   onBack: () => void;
@@ -19,90 +21,151 @@ function JoinSession({ onBack }: JoinSessionProps) {
   const [error, setError] = useState<string | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
   const [waitingApproval, setWaitingApproval] = useState(false);
+  const socketRef = useRef<Socket | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const approvalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const sessionIdRef = useRef(sessionId);
+
+  // Keep a ref in sync so async callbacks always see the latest sessionId
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionActive) {
-      // Use requestAnimationFrame to ensure the focus is applied after 
-      // the DOM has been fully rendered and any transitions are complete.
-      const focusPromptly = () => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-        }
-      };
-      
-      const animationFrame = requestAnimationFrame(focusPromptly);
+      const animationFrame = requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
       return () => cancelAnimationFrame(animationFrame);
     }
   }, [sessionActive]);
 
-  useEffect(() => {
-    const newSocket = io(SOCKET_URL);
-    setSocket(newSocket);
+  // Attach socket event listeners — extracted so we can reuse on reconnect
+  const attachListeners = useCallback((sock: Socket) => {
+    sock.off('request-approved');
+    sock.off('request-denied');
+    sock.off('error');
+    sock.off('connect_error');
 
-    newSocket.on('request-approved', async ({ hostId }) => {
+    sock.on('request-approved', async () => {
+      if (approvalTimerRef.current) {
+        clearTimeout(approvalTimerRef.current);
+        approvalTimerRef.current = null;
+      }
       setWaitingApproval(false);
-      
-      // Save session to history
-      await ChatService.createChat(`Remote Session: ${sessionId}`);
-      
+      setIsConnecting(false);
+      await ChatService.createChat(`Remote Session: ${sessionIdRef.current}`);
       setSessionActive(true);
     });
 
-    newSocket.on('request-denied', () => {
+    sock.on('request-denied', () => {
+      if (approvalTimerRef.current) {
+        clearTimeout(approvalTimerRef.current);
+        approvalTimerRef.current = null;
+      }
       setWaitingApproval(false);
-      setError('Connection was denied by the host');
       setIsConnecting(false);
+      setError('Connection was denied by the host');
     });
 
-    newSocket.on('error', (msg) => {
+    sock.on('error', (msg: string) => {
       setError(msg);
       setIsConnecting(false);
+      setWaitingApproval(false);
     });
 
-    return () => {
-      newSocket.disconnect();
-    };
+    sock.on('connect_error', () => {
+      setError('Unable to reach the signaling server. Please try again.');
+      setIsConnecting(false);
+      setWaitingApproval(false);
+    });
   }, []);
 
+  useEffect(() => {
+    const newSocket = io(SOCKET_URL, {
+      // Reconnect automatically but don't hammer the server
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+    socketRef.current = newSocket;
+    setSocket(newSocket);
+    attachListeners(newSocket);
+
+    return () => {
+      if (approvalTimerRef.current) clearTimeout(approvalTimerRef.current);
+      newSocket.disconnect();
+    };
+  }, [attachListeners]);
+
   const handleConnect = async () => {
-    if (sessionId.trim().length < 6 || !socket) {
+    if (sessionId.trim().length < 6) {
       setError('Please enter a valid session ID');
       return;
     }
 
     setError(null);
+
+    // If the socket is gone or disconnected, create a fresh one first
+    let sock = socketRef.current;
+    if (!sock || !sock.connected) {
+      if (sock) sock.disconnect();
+      sock = io(SOCKET_URL, { reconnectionAttempts: 5, reconnectionDelay: 1000 });
+      socketRef.current = sock;
+      setSocket(sock);
+      attachListeners(sock);
+      // Wait for the socket to actually connect before emitting
+      await new Promise<void>((resolve, reject) => {
+        const onConnect = () => { sock!.off('connect_error', onErr); resolve(); };
+        const onErr = () => { sock!.off('connect', onConnect); reject(new Error('connect_error')); };
+        sock!.once('connect', onConnect);
+        sock!.once('connect_error', onErr);
+        setTimeout(() => { sock!.off('connect', onConnect); sock!.off('connect_error', onErr); reject(new Error('timeout')); }, 8000);
+      }).catch(() => {
+        setError('Unable to reach the signaling server. Please check your connection.');
+        setIsConnecting(false);
+        return;
+      });
+      // If setError was called above, bail out
+      if (!sock.connected) return;
+    }
+
     setIsConnecting(true);
-    socket.emit('join-session', sessionId.trim());
+    sock.emit('join-session', sessionId.trim());
+
+    // After the server forwards to the host we move to "waiting for approval"
+    // The server immediately relays connection-request to host; we just go to waiting state.
+    // Give a small delay so the server can relay, then show waiting UI.
+    setTimeout(() => {
+      setIsConnecting(false);
+      setWaitingApproval(true);
+
+      // Start approval timeout
+      if (approvalTimerRef.current) clearTimeout(approvalTimerRef.current);
+      approvalTimerRef.current = setTimeout(() => {
+        setWaitingApproval(false);
+        setError('No response from host. The session may have expired or the host is unavailable.');
+      }, APPROVAL_TIMEOUT_MS);
+    }, 500);
   };
 
   const handleCancel = () => {
+    if (approvalTimerRef.current) {
+      clearTimeout(approvalTimerRef.current);
+      approvalTimerRef.current = null;
+    }
     setIsConnecting(false);
     setWaitingApproval(false);
     setError(null);
     setSessionId('');
-    if (socket) {
-      socket.disconnect();
-      const newSocket = io(SOCKET_URL);
-      setSocket(newSocket);
-      
-      newSocket.on('request-approved', ({ hostId }) => {
-        setWaitingApproval(false);
-        setSessionActive(true);
-      });
 
-      newSocket.on('request-denied', () => {
-        setWaitingApproval(false);
-        setError('Connection was denied by the host');
-        setIsConnecting(false);
-      });
-
-      newSocket.on('error', (msg) => {
-        setError(msg);
-        setIsConnecting(false);
-      });
-    }
+    // Reconnect with a fresh socket so we start clean
+    const sock = socketRef.current;
+    if (sock) sock.disconnect();
+    const newSocket = io(SOCKET_URL, { reconnectionAttempts: 5, reconnectionDelay: 1000 });
+    socketRef.current = newSocket;
+    setSocket(newSocket);
+    attachListeners(newSocket);
   };
 
   const handleBack = () => {
