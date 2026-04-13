@@ -354,7 +354,8 @@ Always include "app": "WhatsApp" in your JSON.` },
               }, 2000);
             }
           } else if (result?.error) {
-            showBubble(`Action failed: ${result.error}`, true);
+            console.error('[OverlayBar] Action execution failed:', result.error);
+            showBubble('Action failed. Please try again', true);
           }
         } else {
           setPendingAction(normalizedAction);
@@ -463,11 +464,17 @@ Always include "app": "WhatsApp" in your JSON.` },
         }
       });
     } catch (err: any) {
-      console.error('[OverlayBar] Gemini error:', err);
-      const errorMsg = err?.message?.includes('429')
-        ? 'API quota exceeded. Try again shortly.'
-        : 'Error: ' + (err?.message || 'Unknown error');
-      showBubble(errorMsg, true);
+      console.error('[OverlayBar] AI error:', err);
+      const rawMsg = err?.message || '';
+      let finalMsg = 'Please try again';
+
+      if (rawMsg.includes('429')) {
+        finalMsg = 'API quota exceeded. Please try again';
+      } else if (rawMsg.includes('503') || rawMsg.includes('high demand') || rawMsg.includes('UNAVAILABLE')) {
+        finalMsg = 'AI is under high demand. Please try again';
+      }
+
+      showBubble(finalMsg, true);
     } finally {
       setIsLoading(false);
     }

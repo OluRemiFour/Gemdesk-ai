@@ -81,11 +81,14 @@ export class CerebrasService {
 
         if (!response.ok) {
           const errorText = await response.text();
-          // Rate limit or quota exceeded
-          if (response.status === 429 || response.status === 402) {
-            console.warn(`[CerebrasService] Key ${this.currentKeyIndex} exhausted (${response.status}). Rotating...`);
+          // Rate limit or transient error
+          const isTransient = [429, 402, 500, 503, 504].includes(response.status);
+          
+          if (isTransient) {
+            console.warn(`[CerebrasService] Key ${this.currentKeyIndex} hit ${response.status}. Rotating...`);
             attempts++;
-            if (attempts >= maxRetries) throw new Error('All Cerebras API keys exhausted.');
+            if (attempts >= maxRetries) throw new Error('All Cerebras API keys exhausted or service unavailable.');
+            await new Promise(r => setTimeout(r, 1000));
             this.rotateKey();
             continue;
           }
@@ -101,12 +104,13 @@ export class CerebrasService {
 
         return text;
       } catch (error: any) {
-        // If it's a rotation error, it's already handled above
-        if (error.message?.includes('exhausted')) throw error;
+        // If it's a rotation/exhaustion error, it's already handled above
+        if (error.message?.includes('exhausted') || error.message?.includes('unavailable')) throw error;
         // For network errors, try next key
-        if (attempts < maxRetries - 1 && (error.message?.includes('fetch') || error.message?.includes('network'))) {
+        if (attempts < maxRetries - 1 && (error.message?.includes('fetch') || error.message?.includes('network') || error.message?.includes('failed'))) {
           console.warn(`[CerebrasService] Network error, rotating key...`);
           attempts++;
+          await new Promise(r => setTimeout(r, 500));
           this.rotateKey();
           continue;
         }
