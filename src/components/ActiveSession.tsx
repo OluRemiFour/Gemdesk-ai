@@ -28,13 +28,27 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   const [remoteMicEnabled, setRemoteMicEnabled] = useState(false);
   const [localAudioStream, setLocalAudioStream] = useState<MediaStream | null>(null);
   
+  const [streamTimedOut, setStreamTimedOut] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const peerRef = useRef<SimplePeer.Instance | null>(null);
+  // Buffer signals that arrive before the peer is constructed
+  const signalQueueRef = useRef<any[]>([]);
+  const streamTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Performance optimizations for mouse tracking
   const lastMouseEmitRef = useRef<number>(0);
   const pendingMouseRef = useRef<{ x: number; y: number } | null>(null);
   const mouseRafRef = useRef<number | null>(null);
+  const cachedDimensionsRef = useRef<{
+    width: number;
+    height: number;
+    videoWidth: number;
+    videoHeight: number;
+    left: number;
+    top: number;
+  } | null>(null);
 
   useEffect(() => {
     if (videoRef.current && remoteStream) {
@@ -46,6 +60,21 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
   useEffect(() => {
     if (!socket) return;
 
+    // ─── Register the signal listener BEFORE creating the peer ───────────────
+    // This prevents a race where the viewer sends an offer before the host
+    // has hooked up its own listener, causing ICE candidates to be dropped.
+    // Incoming signals are queued until the peer is ready to receive them.
+    signalQueueRef.current = [];
+    const handleIncomingSignal = ({ signal }: { signal: any }) => {
+      if (peerRef.current) {
+        peerRef.current.signal(signal);
+      } else {
+        // Peer not yet created — buffer the signal
+        signalQueueRef.current.push(signal);
+      }
+    };
+    socket.on('signal', handleIncomingSignal);
+
     // WebRTC Peer setup with high-quality config
     const peer = new SimplePeer({
       initiator: !isHost, // Viewer initiates
@@ -55,6 +84,7 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
         ],
       },
       // Request higher quality encoding
@@ -75,16 +105,29 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
 
     peerRef.current = peer;
 
-    peer.on('signal', (data) => {
+    // Drain any signals that arrived before the peer was constructed
+    if (signalQueueRef.current.length > 0) {
+      signalQueueRef.current.forEach(sig => peer.signal(sig));
+      signalQueueRef.current = [];
+    }
+
+    peer.on('signal', (data: any) => {
       socket.emit('signal', {
         sessionId,
         signal: data
       });
     });
 
-    socket.on('signal', ({ signal }) => {
-      peer.signal(signal);
-    });
+    // Start a stream acquisition timer for non-hosts
+    if (!isHost) {
+      if (streamTimeoutRef.current) clearTimeout(streamTimeoutRef.current);
+      streamTimeoutRef.current = setTimeout(() => {
+        // If we still have no stream after 20 seconds, surface the retry UI
+        if (!peerRef.current || !(peerRef.current as any)._connected) {
+          setStreamTimedOut(true);
+        }
+      }, 20_000);
+    }
 
     // Once connected, boost sender bitrate via RTCRtpSender
     peer.on('connect', () => {
@@ -165,6 +208,50 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       socket.on('control-command', ({ command }) => {
         window.electron.sendInput(command.type, command.data);
       });
+
+      // When a viewer's stream times out and they press Retry, recreate our peer
+      // so a fresh WebRTC handshake can take place with the new initiator.
+      socket.on('viewer-retry-stream', async () => {
+        try {
+          if (peerRef.current) {
+            peerRef.current.destroy();
+            peerRef.current = null;
+          }
+          signalQueueRef.current = [];
+
+          // Re-acquire the screen stream if we don't still have it
+          const activeStream = stream && stream.active ? stream : null;
+
+          const retryPeer = new SimplePeer({
+            initiator: false, // viewer will be initiator on retry
+            trickle: true,
+            stream: activeStream || undefined,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+              ],
+            },
+          });
+          peerRef.current = retryPeer;
+
+          // Drain any buffered signals from the viewer's new initiator peer
+          if (signalQueueRef.current.length > 0) {
+            signalQueueRef.current.forEach(sig => retryPeer.signal(sig));
+            signalQueueRef.current = [];
+          }
+
+          retryPeer.on('signal', (data: any) => {
+            socket.emit('signal', { sessionId, signal: data });
+          });
+          retryPeer.on('connect', () => {
+            console.log('[Host] Retry peer connected');
+          });
+        } catch (err) {
+          console.error('[Host] Failed to recreate peer on retry:', err);
+        }
+      });
     }
 
     // Simulate changing stats
@@ -174,33 +261,66 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       setBandwidth(2.0 + Math.random() * 1.0);
     }, 1000);
 
+    // Resize observer to keep dimensions cached and accurate
+    const resizeObserver = new ResizeObserver(() => {
+      if (containerRef.current && videoRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        cachedDimensionsRef.current = {
+          width: rect.width,
+          height: rect.height,
+          left: rect.left,
+          top: rect.top,
+          videoWidth: videoRef.current.videoWidth,
+          videoHeight: videoRef.current.videoHeight
+        };
+      }
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
     return () => {
       clearInterval(interval);
+      resizeObserver.disconnect();
+      if (streamTimeoutRef.current) clearTimeout(streamTimeoutRef.current);
       peer.destroy();
+      peerRef.current = null;
       socket.off('session-ended');
       socket.off('viewer-disconnected');
-      socket.off('signal');
+      socket.off('signal', handleIncomingSignal);
       socket.off('permissions-updated');
       socket.off('voice-status-updated');
-      if (isHost) socket.off('control-command');
+      if (isHost) {
+        socket.off('control-command');
+        socket.off('viewer-retry-stream');
+      }
     };
   }, [isHost, socket, sessionId, stream, onEnd]);
 
   const getRelativeCoords = (e: React.MouseEvent | React.WheelEvent) => {
     if (!videoRef.current || !containerRef.current) return null;
     
-    const rect = containerRef.current.getBoundingClientRect();
-    const video = videoRef.current;
+    // Use cached dimensions if available, otherwise fallback to bounding rect
+    let dims = cachedDimensionsRef.current;
+    if (!dims || dims.videoWidth === 0) {
+      const rect = containerRef.current.getBoundingClientRect();
+      dims = {
+        width: rect.width,
+        height: rect.height,
+        left: rect.left,
+        top: rect.top,
+        videoWidth: videoRef.current.videoWidth,
+        videoHeight: videoRef.current.videoHeight
+      };
+      cachedDimensionsRef.current = dims;
+    }
     
-    // Get actual video dimensions
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
+    const { width: containerWidth, height: containerHeight, left: containerLeft, top: containerTop, videoWidth, videoHeight } = dims;
     
     if (!videoWidth || !videoHeight) return null;
 
     // Calculate scaling and offsets for object-contain
-    const containerWidth = rect.width;
-    const containerHeight = rect.height;
     const containerRatio = containerWidth / containerHeight;
     const videoRatio = videoWidth / videoHeight;
     
@@ -218,16 +338,15 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
       offsetY = (containerHeight - renderedHeight) / 2;
     }
     
-    // Calculate cursor position relative to the ACTUAL video content
-    const x = (e.clientX - rect.left - offsetX) / renderedWidth;
-    const y = (e.clientY - rect.top - offsetY) / renderedHeight;
+    // Calculate cursor position relative to the ACTUAL video content (clamped 0-1)
+    const x = Math.max(0, Math.min(1, (e.clientX - containerLeft - offsetX) / renderedWidth));
+    const y = Math.max(0, Math.min(1, (e.clientY - containerTop - offsetY) / renderedHeight));
     
     return { x, y };
   };
 
-  // Throttled mouse move: emit at most every 8ms (~120Hz) and use
-  // requestAnimationFrame to coalesce intermediate moves, reducing
-  // socket flood while keeping movement feeling snappy.
+  // Throttled mouse move: emit at most every 6.6ms (~150Hz) to keep it ultra-snappy 
+  // while avoiding socket congestion. Uses requestAnimationFrame to coalesce moves.
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (isHost || !mouseControlEnabled || !socket) return;
     
@@ -241,14 +360,18 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
     const now = performance.now();
     const elapsed = now - lastMouseEmitRef.current;
 
-    // If enough time has passed, emit immediately
-    if (elapsed >= 8) {
+    // If enough time has passed (min 6.6ms for ~150Hz), emit immediately
+    if (elapsed >= 6.6) {
       lastMouseEmitRef.current = now;
       socket.volatile.emit('control-command', {
         sessionId,
         command: { type: 'mouse-move', data: coords }
       });
       pendingMouseRef.current = null;
+      if (mouseRafRef.current) {
+        cancelAnimationFrame(mouseRafRef.current);
+        mouseRafRef.current = null;
+      }
       return;
     }
 
@@ -514,10 +637,98 @@ function ActiveSession({ onEnd, isHost, sessionId, socket, stream }: ActiveSessi
                   muted
                   className="w-full h-full object-contain"
                 />
+              ) : streamTimedOut ? (
+                <div className="text-center space-y-4">
+                  <div className="w-16 h-16 bg-destructive/20 rounded-full flex items-center justify-center mx-auto border border-destructive/30">
+                    <MonitorOff className="w-8 h-8 text-destructive" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Stream failed to initialize</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      The video connection could not be established.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      if (!socket) return;
+
+                      // 1. Tear down stale peer
+                      if (peerRef.current) {
+                        peerRef.current.destroy();
+                        peerRef.current = null;
+                      }
+                      signalQueueRef.current = [];
+                      setStreamTimedOut(false);
+                      setRemoteStream(null);
+
+                      // 2. Ask the host (via server) to also recreate its peer
+                      socket.emit('retry-stream', { sessionId });
+
+                      // 3. Give the host ~300 ms to set up its new non-initiator peer,
+                      //    then create our new initiator peer so the offer/answer flows correctly.
+                      setTimeout(() => {
+                        if (!socket) return;
+
+                        const retryPeer = new SimplePeer({
+                          initiator: true,
+                          trickle: true,
+                          config: {
+                            iceServers: [
+                              { urls: 'stun:stun.l.google.com:19302' },
+                              { urls: 'stun:stun1.l.google.com:19302' },
+                              { urls: 'stun:stun2.l.google.com:19302' },
+                            ],
+                          },
+                        });
+                        peerRef.current = retryPeer;
+
+                        // Re-attach the incoming signal listener on this peer
+                        socket.off('signal');
+                        socket.on('signal', ({ signal }: { signal: any }) => {
+                          if (peerRef.current) {
+                            peerRef.current.signal(signal);
+                          } else {
+                            signalQueueRef.current.push(signal);
+                          }
+                        });
+
+                        retryPeer.on('signal', (data: any) => {
+                          socket.emit('signal', { sessionId, signal: data });
+                        });
+
+                        retryPeer.on('stream', (st) => {
+                          if (st.getVideoTracks().length > 0) {
+                            setStreamTimedOut(false);
+                            setRemoteStream(st);
+                            if (videoRef.current) {
+                              videoRef.current.srcObject = st;
+                              videoRef.current.play().catch(console.error);
+                            }
+                          }
+                        });
+
+                        // Restart 20-second timeout
+                        if (streamTimeoutRef.current) clearTimeout(streamTimeoutRef.current);
+                        streamTimeoutRef.current = setTimeout(() => {
+                          if (!retryPeer.connected) {
+                            setStreamTimedOut(true);
+                          }
+                        }, 20_000);
+                      }, 300);
+                    }}
+                  >
+                    <Loader2 className="w-4 h-4" />
+                    Retry Connection
+                  </Button>
+                </div>
               ) : (
                 <div className="text-center">
                   <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
                   <p className="text-sm text-muted-foreground">Initializing stream...</p>
+                  <p className="text-xs text-muted-foreground mt-1 opacity-60">Waiting for host video…</p>
                 </div>
               )
             )}

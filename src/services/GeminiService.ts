@@ -20,6 +20,10 @@ export class GeminiService {
     this.client = new GoogleGenAI({ apiKey: this.keys[this.currentKeyIndex] });
   }
 
+  private async sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async generateContent(params: any): Promise<any> {
     const maxRetries = this.keys.length;
     let attempts = 0;
@@ -28,16 +32,22 @@ export class GeminiService {
       try {
         return await this.client.models.generateContent(params);
       } catch (error: any) {
-        // Check for 429 (Resource Exhausted)
-        if (error.status === 429 || (error.message && error.message.includes("429")) || error.code === 429) {
-          console.warn(`API Key ${this.currentKeyIndex} exhausted. Rotating...`);
+        const statusCode = error.status || (error.message && error.message.match(/(\d{3})/)?.[1]);
+        const isTransient = [429, 500, 503, 504].includes(Number(statusCode)) || 
+                          (error.message && (error.message.includes("429") || error.message.includes("503") || error.message.includes("high demand")));
+
+        if (isTransient) {
+          console.warn(`[GeminiService] Transient error ${statusCode || ''}. Rotating and retrying... (Attempt ${attempts + 1}/${maxRetries})`);
           attempts++;
           if (attempts >= maxRetries) {
-              throw new Error("All API keys exhausted.");
+              throw error; // Let the caller handle the final failure
           }
+          
+          // Wait a bit before rotating to give the service a breath
+          await this.sleep(1000);
           this.rotateKey();
         } else {
-          // Re-throw other errors
+          // Re-throw other errors immediately
           throw error;
         }
       }

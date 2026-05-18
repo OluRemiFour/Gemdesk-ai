@@ -1,26 +1,55 @@
 import dotenv from 'dotenv';
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen } from 'electron';
-// Load environment variables as early as possible
-dotenv.config();
-
-import { exec } from 'node:child_process';
-import util from 'node:util';
+import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, dialog } from 'electron';
+import fs from 'node:fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'node:child_process';
+import util from 'node:util';
+
+// Load environment variables as early as possible
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const execPromise = util.promisify(exec);
 
+// --- STARTUP LOGGING SYSTEM ---
+const logPath = path.join(os.homedir(), 'gemdesk-startup.log');
+function logToFile(message) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}\n`;
+    fs.appendFileSync(logPath, logMessage);
+    console.log(message);
+  } catch (err) {
+    // Fallback if home dir logging fails
+    try {
+      fs.appendFileSync('gemdesk-fallback.log', `[${new Date().toISOString()}] ${message}\n`);
+    } catch (e) {}
+  }
+}
+
+logToFile('========================================');
+logToFile('--- GemDesk Application Initialization ---');
+logToFile(`Platform: ${os.platform()}`);
+logToFile(`Node Version: ${process.version}`);
+logToFile(`Exec Path: ${process.execPath}`);
+logToFile(`CWD: ${process.cwd()}`);
+logToFile(`Versions: ${JSON.stringify(process.versions)}`);
+logToFile(`Dirname: ${__dirname}`);
+logToFile(`Is Packaged: ${app.isPackaged}`);
+// --------------------------------------
+
 import { ObjectId } from 'mongodb';
-import fs from 'node:fs';
-import os from 'os';
 import { BrowserSandbox } from './services/BrowserSandbox.js';
 import { ComputerControl } from './services/ComputerControl.js';
 import { FileSystemService } from './services/FileSystemService.js';
 import MongoDBService from './services/MongoDBService.js';
 import { ScreenMonitor } from './services/ScreenMonitor.js';
 import { SkillManager } from './services/SkillManager.js';
+import updaterPkg from 'electron-updater';
+const { autoUpdater } = updaterPkg;
 
 
 let mainWindow = null;
@@ -56,6 +85,15 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win.show();
+    logToFile('[Main] Window ready-to-show triggered');
+  });
+
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    logToFile(`[Main] Window failed to load: ${errorCode} - ${errorDescription} (${validatedURL})`);
+  });
+
+  win.webContents.on('crashed', (event, killed) => {
+    logToFile(`[Main] Window crashed! Killed: ${killed}`);
   });
 
   // Intercept the close button — ask renderer for confirmation
@@ -67,12 +105,27 @@ function createWindow() {
   
   mainWindow = win;
 
+  logToFile('[Main] Initializing desktop services...');
   // Initialize services with window reference
-  computerControl = new ComputerControl();
-  screenMonitor = new ScreenMonitor(mainWindow);
-  fileSystem = new FileSystemService();
-  skillManager = new SkillManager();
-  browserSandbox = new BrowserSandbox();
+  try {
+    computerControl = new ComputerControl();
+    logToFile('[Main] ComputerControl initialized');
+    
+    screenMonitor = new ScreenMonitor(mainWindow);
+    logToFile('[Main] ScreenMonitor initialized');
+    
+    fileSystem = new FileSystemService();
+    logToFile('[Main] FileSystemService initialized');
+    
+    skillManager = new SkillManager();
+    logToFile('[Main] SkillManager initialized');
+    
+    browserSandbox = new BrowserSandbox();
+    logToFile('[Main] BrowserSandbox initialized');
+  } catch (err) {
+    logToFile(`[Main] Service initialization error: ${err.message}`);
+    logToFile(err.stack);
+  }
 }
 
 function createOverlayWindow() {
@@ -180,6 +233,12 @@ ipcMain.handle('get-sources', async () => {
   }));
 });
 
+ipcMain.handle('get-screen-source-id', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+  return sources.length > 0 ? sources[0].id : null;
+});
+
+
 // IPC for high-quality screenshot capture specifically for AI
 ipcMain.handle('screenshot-capture', async () => {
   try {
@@ -256,7 +315,7 @@ ipcMain.handle('execute-action', async (event, action) => {
         if (app) {
           console.log(`[Main] Focusing ${app} before click`);
           await computerControl.focusWindow(app);
-          await new Promise(r => setTimeout(r, 500));
+          // Removed redundant 500ms delay as focusWindow is now more efficient
         }
         return await computerControl.click(target.x, target.y, type);
       }
@@ -271,11 +330,19 @@ ipcMain.handle('execute-action', async (event, action) => {
     case 'launch':
     case 'open-path':
     case 'open-url': {
-      const targetPath = action.path || action.target || action.app || action.url;
-      if (!targetPath) return { success: false, error: 'No path or app specified' };
+      const app = action.app;
+      const target = action.path || action.target || action.url;
       
-      // Special handling for common folder names and shortcuts
-      let finalPath = targetPath;
+      if (!app && !target) return { success: false, error: 'No app or path specified' };
+
+      // Case 1: Explicit application launch (potentially with a target)
+      if (app) {
+        console.log(`[Main] Launching app "${app}"` + (target ? ` with target "${target}"` : ''));
+        return await computerControl.launchApp(app, target, { background });
+      }
+
+      // Case 2: Opening a path or URL directly (using default handler)
+      let finalPath = target;
       if (!path.isAbsolute(finalPath) && !finalPath.startsWith('http') && !finalPath.includes('://')) {
         const parts = finalPath.split(/[\\/]/);
         const firstPart = parts[0].toLowerCase();
@@ -290,8 +357,7 @@ ipcMain.handle('execute-action', async (event, action) => {
         }
       }
 
-      console.log(`[Main] Executing ${type} with resolved path:`, finalPath);
-
+      console.log(`[Main] Opening path/URL:`, finalPath);
       if (type === 'open-url' || finalPath.startsWith('http') || finalPath.includes('://')) {
         return await computerControl.openUrl(finalPath, { background });
       }
@@ -322,19 +388,8 @@ ipcMain.handle('execute-action', async (event, action) => {
 
     // Create folder (mkdir) with proper permissions
     case 'create-folder': {
-      const folderPath = action.path || target;
-      try {
-        await fs.promises.mkdir(folderPath, { recursive: true });
-        return { success: true, message: `Folder created: ${folderPath}` };
-      } catch (err) {
-        // Fallback: try via PowerShell (handles permission issues)
-        try {
-          await execPromise(`powershell -Command "New-Item -ItemType Directory -Force -Path '${folderPath}'"`)
-          return { success: true, message: `Folder created via PowerShell: ${folderPath}` };
-        } catch (psErr) {
-          return { success: false, error: psErr.message };
-        }
-      }
+      let folderPath = action.path || target;
+      return await fileSystem.createFolder(folderPath);
     }
       
     case 'get-recycle-bin':
@@ -354,7 +409,16 @@ ipcMain.handle('execute-action', async (event, action) => {
     }
 
     case 'create-doc': {
-      return await computerControl.createDoc(action.filename, action.content);
+      let directory = action.directory || action.path;
+      if (directory && !path.isAbsolute(directory)) {
+        const home = os.homedir();
+        if (directory.toLowerCase() === 'desktop') {
+          directory = path.join(home, 'Desktop');
+        } else if (directory.toLowerCase() === 'documents') {
+          directory = path.join(home, 'Documents');
+        }
+      }
+      return await computerControl.createDoc(action.filename, action.content, { directory });
     }
 
     case 'save-skill': {
@@ -717,13 +781,45 @@ ipcMain.handle('db:delete-chat', async (event, chatId) => {
 });
 
 // Direct Input Injection (For Remote Control)
-ipcMain.on('send-input', async (event, { type, data }) => {
+ipcMain.on('send-input', (event, { type, data }) => {
   if (computerControl) {
-    await computerControl.handleRawInput(type, data);
+    // We don't await here to keep the IPC channel responsive.
+    // ComputerControl.handleRawInput handles internal concurrency for mouse moves.
+    computerControl.handleRawInput(type, data).catch(err => {
+      console.error('[Main] handleRawInput error:', err);
+    });
   }
 });
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
+  logToFile('[Main] App ready event received');
+  // 1. Create window IMMEDIATELY (Non-blocking)
+  createWindow();
+
+  // 2. Initialize background services asynchronously
+  const initServices = async () => {
+    try {
+      logToFile('[Main] Starting background services...');
+      logToFile('[Main] Connecting to MongoDB...');
+      const connected = await MongoDBService.connect();
+      if (!connected) {
+        console.warn('[Main] MongoDB connection failed. App is in Offline Mode.');
+      } else {
+        console.log('[Main] MongoDB connected successfully');
+      }
+
+      // 3. Check for updates (Production only)
+      if (app.isPackaged) {
+        autoUpdater.checkForUpdatesAndNotify();
+      }
+    } catch (err) {
+      console.error('[Main] Service initialization error:', err);
+    }
+  };
+
+  initServices();
+
+  // 4. Register global hotkeys
   ipcMain.handle('window:focus', () => {
     if (mainWindow) {
       mainWindow.show();
@@ -731,20 +827,7 @@ app.whenReady().then(async () => {
     }
   });
 
-  console.log('[Main] Connecting to MongoDB...');
-  const connected = await MongoDBService.connect();
-  
-  if (!connected) {
-    console.error('[Main] Failed to connect to MongoDB. The app will start but database features will be unavailable.');
-  } else {
-    console.log('[Main] MongoDB connected successfully');
-  }
-  
-  createWindow();
-
-  // Register global hotkey
   const registered = globalShortcut.register('CommandOrControl+G', () => {
-    console.log('[Main] Global hotkey Ctrl+G triggered');
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -758,8 +841,31 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('global-hotkey-triggered');
     }
   });
-
   console.log('[Main] Hotkey Ctrl+G registered:', registered);
+});
+
+// Auto-updater events
+autoUpdater.on('update-available', () => {
+  if (mainWindow) mainWindow.webContents.send('update-available');
+});
+
+autoUpdater.on('update-downloaded', () => {
+  if (mainWindow) mainWindow.webContents.send('update-downloaded');
+});
+
+// Handle update installation from renderer
+ipcMain.handle('install-update', () => {
+  autoUpdater.quitAndInstall();
+});
+
+// Global Error Handling
+process.on('uncaughtException', (error) => {
+  console.error('[Main] Uncaught Exception:', error);
+  dialog.showErrorBox('Critical Application Error', error.message || 'An unexpected error occurred.');
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Main] Unhandled Rejection:', reason);
 });
 
 app.on('will-quit', () => {

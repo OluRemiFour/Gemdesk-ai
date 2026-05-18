@@ -23,6 +23,7 @@ function CreateSession({ onBack }: CreateSessionProps) {
   } | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [isAccepting, setIsAccepting] = useState(false);
 
   useEffect(() => {
     const newSocket = io(SOCKET_URL);
@@ -55,22 +56,24 @@ function CreateSession({ onBack }: CreateSessionProps) {
   };
 
   const handleAcceptConnection = async (permission: 'read' | 'write') => {
-    if (!socket || !connectionRequest) return;
-
+    setIsAccepting(true);
     try {
-      // Get screen capture source from Electron
+      // Get screen capture source from Electron - Optimized call
       // @ts-ignore
-      const sources = await window.electron.getSources();
-      const source = sources[0]; // Just take the first one (screen) for now
+      const sourceId = await window.electron.getScreenSourceId();
+      
+      if (!sourceId) {
+        throw new Error('No screen source found');
+      }
 
-      // High-quality constraints: capture at native resolution up to 4K, 60fps
+      // High-quality constraints
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
           //@ts-ignore
           mandatory: {
             chromeMediaSource: 'desktop',
-            chromeMediaSourceId: source.id,
+            chromeMediaSourceId: sourceId,
             minWidth: 1920,
             maxWidth: 3840,
             minHeight: 1080,
@@ -101,6 +104,8 @@ function CreateSession({ onBack }: CreateSessionProps) {
       setSessionActive(true);
     } catch (err) {
       console.error('Error capturing screen:', err);
+    } finally {
+      setIsAccepting(false);
     }
   };
 
@@ -221,15 +226,32 @@ function CreateSession({ onBack }: CreateSessionProps) {
                     <span className="font-medium text-foreground">{connectionRequest.requesterName}</span> wants to connect to your computer
                   </p>
                   <div className="flex flex-col sm:flex-row gap-3 mt-4">
-                    <Button onClick={() => handleAcceptConnection('read')} variant="outline" className="gap-2 border-primary text-primary hover:bg-primary/10">
-                      <Eye className="w-4 h-4" />
+                    <Button 
+                      onClick={() => handleAcceptConnection('read')} 
+                      variant="outline" 
+                      disabled={isAccepting}
+                      className="gap-2 border-primary text-primary hover:bg-primary/10"
+                    >
+                      {isAccepting ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
                       Accept (View Only)
                     </Button>
-                    <Button onClick={() => handleAcceptConnection('write')} className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90">
-                      <MousePointer className="w-4 h-4" />
+                    <Button 
+                      onClick={() => handleAcceptConnection('write')} 
+                      disabled={isAccepting}
+                      className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                      {isAccepting ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <MousePointer className="w-4 h-4" />
+                      )}
                       Accept (Full Control)
                     </Button>
-                    <Button variant="ghost" onClick={handleDenyConnection} className="text-muted-foreground hover:text-destructive">
+                    <Button variant="ghost" onClick={handleDenyConnection} disabled={isAccepting} className="text-muted-foreground hover:text-destructive">
                       Deny
                     </Button>
                   </div>

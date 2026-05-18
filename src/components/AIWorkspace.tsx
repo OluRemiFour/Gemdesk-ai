@@ -97,7 +97,7 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
 3. **Execution Only**: Do not explain how you'll execute a task unless it's a security-sensitive operation or requires high-level permission.
 4. **Background Operations**: When opening apps, folders, or URLs, use "background": true unless the user wants to interact immediately.
 5. **Windows Paths**: Always use double-backslashes in JSON (e.g., "C:\\\\Users\\\\ADMIN\\\\Desktop").
-6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "click", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "whatsapp-initiate-call-dropdown", "create-doc", "open-path".
+6. **EXACT ACTION STRINGS**: You MUST use these exact strings for "action": "launch", "open-url", "type", "keypress", "click", "list-dir", "read-file", "save-document", "create-project", "create-folder", "rename-file", "whatsapp-chat", "whatsapp-call", "whatsapp-initiate-call-dropdown", "create-doc", "open-path", "data-result".
    NEVER use spaces in action names (e.g. use "open-url" not "open url").
 7. **CLICK ACTION**: When using "click", provide coordinates in the "target" field: \`{ "action": "click", "target": { "x": number, "y": number }, "reasoning": "..." }\`.
 8. **CRITICAL JSON RULE**: You MUST wrap your action JSON in triple backticks and ensure it is perfectly valid. Example:
@@ -122,6 +122,15 @@ Your goal is to assist the user by "seeing" their screen and performing actions 
 6. **Opening Folders/Documents**: To open a folder (e.g., Desktop) or a document, use the "open-path" action with the full path or shortcut name (e.g., "Desktop", "Documents").
    - If a file is on the Desktop, use the "Desktop" shortcut prefix (e.g., "Desktop\\\\myfile.pdf") or full absolute path.
    - For PDFs, spreadsheets, or text files, "open-path" will open them in their default application.
+7. **Web & Browser**: 
+   - USE "launch" to open a browser application (e.g., {"action": "launch", "target": "chrome"}).
+   - USE "open-url" ONLY with full web addresses starting with http or https (e.g., {"action": "open-url", "url": "https://gmail.com"}).
+   - NEVER use "open-url" with an app name like "chrome" or "safari".
+   - For searches, use the full search URL (e.g., "https://www.google.com/search?q=restaurants+near+me").
+8. **DATA RESULTS**: If the user asks for structured data, summaries, or extracted info, use the "data-result" action: 
+   \`\`\`json
+   { "action": "data-result", "content": "MARKDOWN_CONTENT", "filename": "Result Name", "reasoning": "..." }
+   \`\`\`
 `;
 
 export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceProps) {
@@ -334,8 +343,21 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
     }
   };
 
-  const speak = useCallback((text: string, lang?: string) => {
+  const speak = useCallback((text: string, lang?: string, isAuto = false, isNecessary = false) => {
     if (isMuted || !text) return;
+
+    // Word count check
+    const words = text.trim().split(/\s+/);
+    if (isAuto && words.length > 12) {
+      console.log('[TTS] Skipping auto-speak: too long (', words.length, 'words)');
+      return;
+    }
+
+    if (isAuto && !isNecessary) {
+      console.log('[TTS] Skipping auto-speak: not necessary');
+      return;
+    }
+
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     if (lang) utterance.lang = lang;
@@ -537,7 +559,8 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
       };
 
       setMessages(prev => [...prev, aiMessage]);
-      speak(cleanContent, language);
+      const isNecessary = !!currentAudio || cleanContent.includes('?') || !!action;
+      speak(cleanContent, language, true, isNecessary);
 
       const finalChatId = await activeChatIdPromise;
       if (finalChatId) {
@@ -591,15 +614,18 @@ export default function AIWorkspace({ onBack, autoStartRecording }: AIWorkspaceP
                     timestamp: new Date()
                 }]);
             }
-            if (actionToRun.type === 'save-document') {
-                if (actionToRun.silent) {
+            if (actionToRun.type === 'save-document' || actionToRun.type === 'data-result') {
+                if (actionToRun.silent && actionToRun.type === 'save-document') {
                     setMessages(prev => [...prev, {
                         id: Date.now().toString(), role: 'assistant',
                         content: `Document saved successfully as ${actionToRun.filename}.`,
                         timestamp: new Date()
                     }]);
                 } else {
-                    setDraftedDocument({ content: actionToRun.content || '', filename: actionToRun.filename || 'document.txt' });
+                    setDraftedDocument({ 
+                      content: actionToRun.content || actionToRun.text || '', 
+                      filename: actionToRun.filename || (actionToRun.type === 'data-result' ? 'Data Result' : 'document.txt') 
+                    });
                     setShowDocumentPreview(true);
                 }
             }
@@ -927,7 +953,7 @@ Output ONLY this JSON if the contact is found.` },
                         <div className="mt-2 flex justify-end">
                            <Button 
                              variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-white/10 text-muted-foreground"
-                             onClick={() => speak(message.content, message.language)} title="Read aloud"
+                             onClick={() => speak(message.content, message.language, false)} title="Read aloud"
                            >
                               <Volume2 className="w-3.5 h-3.5" />
                            </Button>

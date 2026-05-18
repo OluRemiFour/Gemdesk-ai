@@ -7,7 +7,29 @@ const __dirname = path.dirname(__filename);
 
 const distPath = path.join(__dirname, '..', 'dist-electron');
 
+async function killProcesses() {
+  const { exec } = await import('node:child_process');
+  const util = await import('node:util');
+  const execPromise = util.promisify(exec);
+  
+  const processes = ['GemDesk.exe', 'GemDesk Setup*.exe'];
+  
+  console.log('Checking for running GemDesk processes...');
+  for (const proc of processes) {
+    try {
+      if (process.platform === 'win32') {
+        await execPromise(`taskkill /F /IM "${proc}" /T`);
+        console.log(`Killed ${proc} successfully.`);
+      }
+    } catch (err) {
+      // Ignore errors (process not running)
+    }
+  }
+}
+
 async function cleanWithRetry(maxRetries = 3, delay = 1000) {
+  await killProcesses();
+  
   for (let i = 0; i < maxRetries; i++) {
     try {
       if (fs.existsSync(distPath)) {
@@ -20,8 +42,8 @@ async function cleanWithRetry(maxRetries = 3, delay = 1000) {
         return;
       }
     } catch (err) {
-      if (err.code === 'EPERM' && i < maxRetries - 1) {
-        console.log(`Permission denied. Retrying in ${delay}ms... (Attempt ${i + 1}/${maxRetries})`);
+      if ((err.code === 'EPERM' || err.code === 'EBUSY') && i < maxRetries - 1) {
+        console.log(`File locked or permission denied. Retrying in ${delay}ms... (Attempt ${i + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
         throw err;
