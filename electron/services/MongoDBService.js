@@ -1,6 +1,4 @@
 import { MongoClient } from 'mongodb';
-// No need to check for process.env here if it's already handled in main process, 
-// but keeping it for flexibility.
 
 class MongoDBService {
   constructor() {

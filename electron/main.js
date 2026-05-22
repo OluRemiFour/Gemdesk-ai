@@ -7,7 +7,6 @@ import { fileURLToPath } from 'url';
 import { exec } from 'node:child_process';
 import util from 'node:util';
 
-// Load environment variables as early as possible
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +22,6 @@ function logToFile(message) {
     fs.appendFileSync(logPath, logMessage);
     console.log(message);
   } catch (err) {
-    // Fallback if home dir logging fails
     try {
       fs.appendFileSync('gemdesk-fallback.log', `[${new Date().toISOString()}] ${message}\n`);
     } catch (e) {}
@@ -168,10 +166,6 @@ function createOverlayWindow() {
 
 
 }
-
-
-
-
 
 // Renderer confirmed close — actually quit
 ipcMain.handle('confirm-close', () => {

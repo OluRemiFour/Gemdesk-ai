@@ -5,7 +5,7 @@ export class ScreenMonitor {
     this.mainWindow = mainWindow;
     this.isMonitoring = false;
     this.monitorInterval = null;
-    this.intervalMs = 3000; // Default 3 seconds
+    this.intervalMs = 3000; 
     this.lastScreenshot = null;
   }
 

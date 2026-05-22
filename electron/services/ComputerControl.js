@@ -413,8 +413,6 @@ export class ComputerControl {
 
   /**
    * Handles low-level input events from remote control
-   * @param {string} type Event type (mouse-move, click, keydown, keyup)
-   * @param {any} data Event data
    */
   async handleRawInput(type, data) {
     try {
